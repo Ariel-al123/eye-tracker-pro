@@ -42,6 +42,7 @@ class EyeTrackerApp:
             self.cfg.move_deadzone_px,
             self.cfg.cursor_max_speed_px_s,
         )
+        self.controller.scroll_step = max(1, int(self.cfg.edge_scroll_amount) * 2)
         self.mapper = GazeMapper()
         self.filter = PointFilter(self.cfg.filter_min_cutoff, self.cfg.filter_beta, self.cfg.filter_d_cutoff)
 
@@ -86,6 +87,14 @@ class EyeTrackerApp:
         )
         self.calibration_window_created = False
         self._previous_hotkeys: set[int] = set()
+        self._last_external_window: Optional[int] = None
+        self._last_edge_scroll_at = 0.0
+        if self.overlay:
+            self._set_overlay_label("btn_precision", "Precisión OFF")
+            self._set_overlay_label(
+                "btn_edge_scroll",
+                "Auto-scroll ON" if self.cfg.edge_scroll_enabled else "Auto-scroll OFF",
+            )
 
     def _open_camera(self) -> None:
         configured = max(0, int(self.cfg.camera_index))
@@ -154,6 +163,12 @@ class EyeTrackerApp:
 
     def _show_calibration(self, frame: np.ndarray) -> None:
         name = "EyeTrackerPro - Calibracion"
+        if self.calibration_window_created:
+            try:
+                if cv2.getWindowProperty(name, cv2.WND_PROP_VISIBLE) < 1:
+                    self.calibration_window_created = False
+            except cv2.error:
+                self.calibration_window_created = False
         if not self.calibration_window_created:
             cv2.namedWindow(name, cv2.WINDOW_NORMAL)
             cv2.setWindowProperty(name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
@@ -307,11 +322,85 @@ class EyeTrackerApp:
             self.fine_tune_mode = not self.fine_tune_mode
             self.status = "Ajuste fino: ON" if self.fine_tune_mode else "Ajuste fino: OFF"
             return
+        if action == "precision_toggle":
+            self.controller.set_direct_mode(False)
+            self.controller.set_precision_mode(not self.controller.precision_mode)
+            self._set_overlay_label(
+                "btn_precision",
+                "Precisión ON" if self.controller.precision_mode else "Precisión OFF",
+            )
+            return
+        if action == "edge_scroll_toggle":
+            self.cfg.edge_scroll_enabled = not self.cfg.edge_scroll_enabled
+            self._set_overlay_label(
+                "btn_edge_scroll",
+                "Auto-scroll ON" if self.cfg.edge_scroll_enabled else "Auto-scroll OFF",
+            )
+            self.status = "Auto-scroll activado" if self.cfg.edge_scroll_enabled else "Auto-scroll desactivado"
+            return
+        if action in {
+            "browser_back", "browser_forward", "browser_reload", "browser_address",
+            "browser_prev_tab", "browser_next_tab", "browser_zoom_in", "browser_zoom_out",
+            "browser_zoom_reset", "browser_undo", "scroll_up", "scroll_down",
+        }:
+            self._focus_browser_window()
         result = self.controller.perform_action(action)
         if action == "pause":
             self.status = "Pausado" if self.controller.paused else "Mirada activa"
         elif result not in {"ignored_paused"}:
             self.status = f"Acción: {action}"
+
+    def _set_overlay_label(self, button_id: str, label: str) -> None:
+        if not self.overlay:
+            return
+        for button in self.overlay.buttons:
+            if button.id == button_id:
+                button.label = label
+                return
+
+    @staticmethod
+    def _handle_value(handle: object) -> int:
+        return int(getattr(handle, "value", handle) or 0)
+
+    def _focus_browser_window(self) -> None:
+        if os.name != "nt" or not self._last_external_window:
+            return
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = wintypes.HWND(self._last_external_window)
+            user32.GetForegroundWindow.argtypes = []
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            user32.IsWindow.argtypes = [wintypes.HWND]
+            user32.IsWindow.restype = wintypes.BOOL
+            if not user32.IsWindow(hwnd):
+                self._last_external_window = None
+                return
+            current_window = user32.GetForegroundWindow()
+            if self._handle_value(current_window) != self._handle_value(hwnd):
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+                time.sleep(0.03)
+        except (AttributeError, OSError):
+            pass
+
+    def _update_edge_scroll(self, x: int, y: int) -> None:
+        if not self.cfg.edge_scroll_enabled or self.controller.paused:
+            return
+        if self.overlay and self.overlay.button_at(x, y):
+            return
+        now = time.monotonic()
+        if (now - self._last_edge_scroll_at) * 1000 < self.cfg.edge_scroll_interval_ms:
+            return
+        action = None
+        if y <= self.cfg.edge_scroll_margin_px:
+            action = "scroll_up"
+        elif y >= self.screen_h - 1 - self.cfg.edge_scroll_margin_px:
+            action = "scroll_down"
+        if action:
+            self._focus_browser_window()
+            amount = max(1, int(self.cfg.edge_scroll_amount))
+            self.controller.scroll_by(amount if action == "scroll_up" else -amount)
+            self._last_edge_scroll_at = now
 
     def _poll_keyboard(self) -> int:
         """Poll hotkeys so several OpenCV windows do not swallow key presses."""
@@ -332,7 +421,12 @@ class EyeTrackerApp:
         down = {key for key in keys if user32.GetAsyncKeyState(key) & 0x8000}
         pressed = down - self._previous_hotkeys
         self._previous_hotkeys = down
+        if 27 in pressed:
+            return 27
         if process_id.value != os.getpid():
+            foreground_value = self._handle_value(foreground)
+            if foreground_value:
+                self._last_external_window = foreground_value
             return -1
         for key in keys:
             if key in pressed:
@@ -397,6 +491,7 @@ class EyeTrackerApp:
 
         if self.cfg.move_cursor_enabled and not self.controller.paused:
             cursor_x, cursor_y = self.controller.move(ix, iy)
+            self._update_edge_scroll(cursor_x, cursor_y)
 
         dwell_progress = 0.0
         action_target = None
@@ -499,7 +594,21 @@ class EyeTrackerApp:
                 ok, frame = self.cap.read()
                 if not ok or frame is None:
                     self.status = "Error leyendo cámara"
-                    break
+                    if self.overlay:
+                        self.overlay.state.status = self.status
+                        self.overlay.state.paused = self.controller.paused
+                        self.overlay.render()
+                    error_view = np.zeros((540, 960, 3), dtype=np.uint8)
+                    cv2.putText(error_view, self.status, (35, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 120, 255), 2, cv2.LINE_AA)
+                    cv2.imshow("EyeTrackerPro - Preview", error_view)
+                    key_raw = cv2.waitKeyEx(1)
+                    key = self._poll_keyboard()
+                    if key == -1 and os.name != "nt":
+                        key = key_raw & 0xFF if key_raw != -1 else -1
+                    if key == 27:
+                        self.running = False
+                    time.sleep(0.05)
+                    continue
 
                 ts = int(time.perf_counter() * 1000)
                 if self.eye_theia:
@@ -602,35 +711,13 @@ class EyeTrackerApp:
                 if key == -1 and os.name != "nt":
                     key = key_raw & 0xFF if key_raw != -1 else -1
 
-                try:
-                    if cv2.getWindowProperty("EyeTrackerPro - Preview", cv2.WND_PROP_VISIBLE) < 1:
-                        self.running = False
-                except cv2.error:
-                    pass
-                if self.calibrating:
-                    try:
-                        if cv2.getWindowProperty("EyeTrackerPro - Calibracion", cv2.WND_PROP_VISIBLE) < 1:
-                            self.running = False
-                    except cv2.error:
-                        pass
-
                 if self.overlay:
                     clicked_action = self.overlay.consume_action()
                     if clicked_action:
                         self._handle_action(clicked_action)
 
                 if key == 27:  # ESC
-                    if self.calibrating:
-                        self.calibrating = False
-                        if self.eye_gestures:
-                            self.eye_gestures.cancel_calibration()
-                        self.status = "Calibración cancelada"
-                        self.controller.set_paused(True)
-                    elif self.fine_tune_mode:
-                        self.fine_tune_mode = False
-                        self.status = "Ajuste fino desactivado"
-                    else:
-                        self.running = False
+                    self.running = False
                 elif key in (ord('c'), ord('C')):
                     self.start_calibration()
                 elif key in (ord('p'), ord('P')):
@@ -639,6 +726,8 @@ class EyeTrackerApp:
                     self.status = "Pausado" if self.controller.paused else "Mirada activa"
                 elif key in (ord('m'), ord('M')):
                     self.cfg.move_cursor_enabled = True
+                    self.controller.set_precision_mode(False)
+                    self._set_overlay_label("btn_precision", "Precisión OFF")
                     self.controller.set_direct_mode(not self.controller.direct_mode)
                     self.status = (
                         "Modo directo: igual que la calibracion"

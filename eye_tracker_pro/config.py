@@ -46,6 +46,10 @@ class AppConfig:
     dwell_time_ms: int = 450
     dwell_radius_px: int = 35
     dwell_cooldown_ms: int = 700
+    edge_scroll_enabled: bool = False
+    edge_scroll_margin_px: int = 45
+    edge_scroll_interval_ms: int = 170
+    edge_scroll_amount: int = 2
 
     # Safety
     pause_on_face_lost: bool = True
@@ -66,13 +70,26 @@ class AppConfig:
     show_gaze_dot: bool = True
 
     buttons: List[ButtonConfig] = field(default_factory=lambda: [
-        ButtonConfig("btn_left", "Clic izq", "left_click", 20, 20),
-        ButtonConfig("btn_right", "Clic der", "right_click", 180, 20),
-        ButtonConfig("btn_double", "Doble", "double_click", 340, 20),
-        ButtonConfig("btn_up", "Subir", "scroll_up", 500, 20),
-        ButtonConfig("btn_down", "Bajar", "scroll_down", 660, 20),
-        ButtonConfig("btn_pause", "Pausa", "pause", 820, 20),
-        ButtonConfig("btn_cal", "Calibrar", "calibrate", 980, 20),
+        ButtonConfig("btn_left", "Clic izq", "left_click", 20, 20, 110, 54),
+        ButtonConfig("btn_right", "Clic der", "right_click", 140, 20, 110, 54),
+        ButtonConfig("btn_double", "Doble", "double_click", 260, 20, 110, 54),
+        ButtonConfig("btn_up", "Scroll ↑", "scroll_up", 380, 20, 110, 54),
+        ButtonConfig("btn_down", "Scroll ↓", "scroll_down", 500, 20, 110, 54),
+        ButtonConfig("btn_pause", "Pausa", "pause", 620, 20, 110, 54),
+        ButtonConfig("btn_cal", "Calibrar", "calibrate", 740, 20, 110, 54),
+        ButtonConfig("btn_back", "Atrás", "browser_back", 20, 85, 110, 54),
+        ButtonConfig("btn_forward", "Adelante", "browser_forward", 140, 85, 110, 54),
+        ButtonConfig("btn_reload", "Recargar", "browser_reload", 260, 85, 110, 54),
+        ButtonConfig("btn_address", "Dirección", "browser_address", 380, 85, 110, 54),
+        ButtonConfig("btn_prev_tab", "Pestaña ←", "browser_prev_tab", 500, 85, 110, 54),
+        ButtonConfig("btn_next_tab", "Pestaña →", "browser_next_tab", 620, 85, 110, 54),
+        ButtonConfig("btn_zoom_in", "Zoom +", "browser_zoom_in", 740, 85, 110, 54),
+        ButtonConfig("btn_zoom_out", "Zoom −", "browser_zoom_out", 20, 150, 110, 54),
+        ButtonConfig("btn_zoom_reset", "Zoom 100%", "browser_zoom_reset", 140, 150, 110, 54),
+        ButtonConfig("btn_precision", "Precisión", "precision_toggle", 260, 150, 110, 54),
+        ButtonConfig("btn_edge_scroll", "Auto-scroll", "edge_scroll_toggle", 380, 150, 110, 54),
+        ButtonConfig("btn_cancel", "Cancelar", "cancel_dwell", 500, 150, 110, 54),
+        ButtonConfig("btn_undo", "Deshacer", "browser_undo", 620, 150, 110, 54),
     ])
 
 

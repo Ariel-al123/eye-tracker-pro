@@ -35,7 +35,12 @@ class OverlayWindow:
 
     def create(self) -> None:
         if self._created:
-            return
+            try:
+                if cv2.getWindowProperty(self.window_name, cv2.WND_PROP_VISIBLE) > 0:
+                    return
+            except cv2.error:
+                pass
+            self._created = False
         cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self.window_name, self.width, self.height)
         cv2.moveWindow(self.window_name, self.win_x, self.win_y)
