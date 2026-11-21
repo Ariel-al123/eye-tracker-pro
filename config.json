@@ -20,7 +20,7 @@
   "dwell_cooldown_ms": 700,
   "pause_on_face_lost": true,
   "face_lost_pause_ms": 700,
-  "move_cursor_enabled": true,
+  "move_cursor_enabled": false,
   "fine_gain_x": 1.0,
   "fine_gain_y": 1.0,
   "fine_offset_x": 0.0,

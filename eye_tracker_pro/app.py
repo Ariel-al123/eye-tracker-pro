@@ -97,7 +97,7 @@ class EyeTrackerApp:
                 continue
 
             # Some virtual/blocked cameras report isOpened=True but return a black image.
-            if float(frame.mean()) < 1.0 and float(frame.std()) < 1.5:
+            if float(frame.mean()) < 2.0 and float(frame.std()) < 12.0:
                 black_indices.append(index)
                 cap.release()
                 continue
@@ -132,12 +132,13 @@ class EyeTrackerApp:
                 self.calibrating = False
                 self.filter.reset()
                 self.controller.set_paused(False)
-                self.status = "Calibración EyeGestures terminada. Mirada activa."
+                self.status = "Calibracion terminada. Mirada activa."
             else:
                 self.eye_gestures.start_calibration()
                 self.calibrating = True
+                self.filter.reset()
                 self.controller.set_paused(True)
-                self.status = "EyeGestures: fija la mirada en cada punto y presiona C al terminar"
+                self.status = f"EyeGestures: punto 1/{self.eye_gestures.total_points}"
             return
         if self.eye_theia and self.eye_theia.training:
             self.status = "Espera a que termine la personalización de EyeTheia."
@@ -444,6 +445,14 @@ class EyeTrackerApp:
                         left_eye_open=0.0 if gesture_frame.blink else 1.0,
                         right_eye_open=0.0 if gesture_frame.blink else 1.0,
                     )
+                    if self.calibrating:
+                        if self.eye_gestures.completed_points >= self.eye_gestures.total_points:
+                            self.status = f"Test completo: {self.eye_gestures.total_points}/{self.eye_gestures.total_points}. Presiona C para continuar."
+                        else:
+                            self.status = (
+                                f"EyeGestures: {self.eye_gestures.completed_points + 1}/"
+                                f"{self.eye_gestures.total_points} - fija la mirada en el punto"
+                            )
                 else:
                     feats = self.detector.detect(frame, ts)
 
@@ -451,12 +460,25 @@ class EyeTrackerApp:
                     calib_view = np.zeros((self.screen_h, self.screen_w, 3), dtype=np.uint8)
                     calib_view[:] = (18, 18, 18)
                     target = self.eye_gestures.last_frame.target
-                    if target:
+                    if target and self.eye_gestures.completed_points < self.eye_gestures.total_points:
                         radius = max(12, self.eye_gestures.last_frame.acceptance_radius)
                         cv2.circle(calib_view, target, radius, (60, 60, 60), 2, cv2.LINE_AA)
                         cv2.circle(calib_view, target, 12, (0, 0, 255), 3, cv2.LINE_AA)
                         cv2.circle(calib_view, target, 4, (0, 0, 255), -1, cv2.LINE_AA)
-                    cv2.putText(calib_view, "Fija la mirada en el punto. Presiona C para terminar.", (50, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (240, 240, 240), 2, cv2.LINE_AA)
+                    if self.eye_gestures_point and feats.face_detected:
+                        cv2.circle(calib_view, self.eye_gestures_point, 18, (255, 120, 0), -1, cv2.LINE_AA)
+                        cv2.circle(calib_view, self.eye_gestures_point, 24, (255, 255, 255), 2, cv2.LINE_AA)
+                    if self.eye_gestures.completed_points >= self.eye_gestures.total_points:
+                        progress_text = f"Test completo: {self.eye_gestures.total_points}/{self.eye_gestures.total_points} puntos. Presiona C para continuar; ESC cancela."
+                    else:
+                        progress_text = (
+                            f"Calibracion: {self.eye_gestures.completed_points + 1}/"
+                                f"{self.eye_gestures.total_points} - mira el punto; espera 1 s entre puntos"
+                        )
+                    cv2.putText(calib_view, progress_text, (50, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (240, 240, 240), 2, cv2.LINE_AA)
+                    cv2.putText(calib_view, "Punto azul: posicion estimada de la mirada", (50, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 160, 40), 2, cv2.LINE_AA)
+                    if not feats.face_detected:
+                        cv2.putText(calib_view, "SIN ROSTRO: revisa la imagen y el indice de la camara", (50, 145), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 100, 255), 2, cv2.LINE_AA)
                     cv2.namedWindow("EyeTrackerPro - Calibracion", cv2.WND_PROP_FULLSCREEN)
                     cv2.setWindowProperty("EyeTrackerPro - Calibracion", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
                     cv2.imshow("EyeTrackerPro - Calibracion", calib_view)

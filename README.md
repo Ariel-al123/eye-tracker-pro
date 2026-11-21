@@ -8,7 +8,7 @@ El motor seleccionado por defecto en esta rama es EyeGestures 3.2.4. Instálalo 
 uv pip install --cache-dir .uv-cache --python .venv\Scripts\python.exe -r requirements-eyegestures.txt
 ```
 
-En `config.json` puedes cambiar `gaze_engine` entre `eyegestures`, `eyetheia` y `mediapipe`. EyeGestures usa su calibración interna: pulsa `C`, sigue los puntos que presenta y pulsa `C` otra vez para terminar. Para EyeTheia instala además `requirements-eyetheia.txt`.
+En `config.json` puedes cambiar `gaze_engine` entre `eyegestures`, `eyetheia` y `mediapipe`. El test de EyeGestures recorre 25 puntos cerca de esquinas, bordes y centro; suena un tono al completar cada punto. Pulsa `C` otra vez para finalizar, o `ESC` para cancelar. Para EyeTheia instala además `requirements-eyetheia.txt`.
 
 EyeGestures 3.2.4 se usa porque admite Python 3.11; la versión 4.x requiere Python 3.13 según sus metadatos de PyPI y cambió la API. EyeGestures está bajo GPLv3. Revisa las obligaciones de esa licencia antes de distribuir una aplicación que lo incluya.
 

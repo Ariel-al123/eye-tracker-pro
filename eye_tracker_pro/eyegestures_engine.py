@@ -2,8 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Optional
+import time
 
+import cv2
+import mediapipe as mp
 import numpy as np
+
+EYE_GESTURES_CALIBRATION_POINTS = 25
+EYE_GESTURES_POINT_DELAY_SECONDS = 1.0
 
 
 @dataclass
@@ -24,6 +30,9 @@ class EyeGesturesEngine:
         self._engine = self._new_tracker()
         self.calibrating = False
         self.ready = False
+        self.completed_points = 0
+        self.total_points = EYE_GESTURES_CALIBRATION_POINTS
+        self._collect_after = 0.0
         self.last_error: Optional[str] = None
         self._reported_error: Optional[str] = None
         self.last_frame = EyeGesturesFrame(False, None, None, 0, False)
@@ -31,7 +40,7 @@ class EyeGesturesEngine:
     @staticmethod
     def _new_tracker():
         try:
-            from eyeGestures import EyeGestures_v3, FaceFinder
+            from eyeGestures import EyeGestures_v3
         except ImportError as exc:
             raise RuntimeError(
                 "EyeGestures no está instalado. Ejecuta: "
@@ -41,11 +50,41 @@ class EyeGesturesEngine:
         tracker = EyeGestures_v3()
         # EyeGestures 3.2.4 defaults FaceMesh to static_image_mode=True. Keep
         # MediaPipe's temporal tracker alive between frames for steadier face reacquisition.
-        finder = FaceFinder(static_image_mode=False)
+        finder = tracker.finder
         # EyeGestures_v3.getLandmarks already converts BGR to RGB before the
         # finder is called. Avoid FaceFinder's second channel swap.
-        finder.find = lambda frame_rgb: finder.mp_face_mesh.process(frame_rgb)
+        finder.mp_face_mesh.close()
+        finder.mp_face_mesh = mp.solutions.face_mesh.FaceMesh(
+            refine_landmarks=True,
+            static_image_mode=False,
+            min_detection_confidence=0.35,
+            min_tracking_confidence=0.4,
+        )
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+        def find_face(frame_rgb):
+            result = finder.mp_face_mesh.process(frame_rgb)
+            if result.multi_face_landmarks:
+                return result
+            if float(frame_rgb.mean()) < 5.0:
+                return result
+            ycrcb = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2YCrCb)
+            ycrcb[:, :, 0] = clahe.apply(ycrcb[:, :, 0])
+            enhanced_rgb = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
+            return finder.mp_face_mesh.process(enhanced_rgb)
+
+        finder.find = find_face
         tracker.finder = finder
+        calibration_map = np.array([
+            (0.04, 0.04), (0.12, 0.05), (0.05, 0.12), (0.12, 0.12),
+            (0.96, 0.04), (0.88, 0.05), (0.95, 0.12), (0.88, 0.12),
+            (0.04, 0.96), (0.12, 0.95), (0.05, 0.88), (0.12, 0.88),
+            (0.96, 0.96), (0.88, 0.95), (0.95, 0.88), (0.88, 0.88),
+            (0.35, 0.04), (0.65, 0.04), (0.35, 0.96), (0.65, 0.96),
+            (0.04, 0.35), (0.04, 0.65), (0.96, 0.35), (0.96, 0.65),
+            (0.50, 0.50),
+        ], dtype=np.float32)
+        tracker.uploadCalibrationMap(calibration_map, context="eye-tracker-pro")
         return tracker
 
     def start_calibration(self) -> None:
@@ -56,6 +95,8 @@ class EyeGesturesEngine:
         self._engine = self._new_tracker()
         self.calibrating = True
         self.ready = False
+        self.completed_points = 0
+        self._collect_after = time.monotonic() + EYE_GESTURES_POINT_DELAY_SECONDS
 
     def finish_calibration(self) -> None:
         self.calibrating = False
@@ -64,6 +105,8 @@ class EyeGesturesEngine:
     def cancel_calibration(self) -> None:
         self.calibrating = False
         self.ready = False
+        self.completed_points = 0
+        self._collect_after = 0.0
 
     def close(self) -> None:
         finder = getattr(self._engine, "finder", None)
@@ -72,14 +115,40 @@ class EyeGesturesEngine:
             mesh.close()
 
     def detect(self, frame_bgr: np.ndarray) -> EyeGesturesFrame:
+        if float(frame_bgr.mean()) < 2.0 and float(frame_bgr.std()) < 12.0:
+            self.last_error = "la camara entrega una imagen negra"
+            if self.last_error != self._reported_error:
+                print(f"EyeGestures tracking error: {self.last_error}", flush=True)
+                self._reported_error = self.last_error
+            self.last_frame = EyeGesturesFrame(False, None, None, 0, False)
+            return self.last_frame
         try:
+            context = "eye-tracker-pro"
+            now = time.monotonic()
+            collect_calibration = self.calibrating and now >= self._collect_after
+            matrix = self._engine.clb.get(context)
+            previous_index = matrix.matrix.iterator if matrix is not None else 0
             event, calibration_event = self._engine.step(
                 frame_bgr,
-                self.calibrating,
+                collect_calibration,
                 self._screen_width,
                 self._screen_height,
-                context="eye-tracker-pro",
+                context=context,
             )
+            matrix = self._engine.clb[context].matrix
+            current_index = matrix.iterator
+            if self.calibrating and current_index != previous_index:
+                if previous_index == self.total_points - 1 and current_index == 0:
+                    self.completed_points = self.total_points
+                    self.calibrating = False
+                else:
+                    self.completed_points = min(self.total_points, current_index)
+                self._collect_after = now + EYE_GESTURES_POINT_DELAY_SECONDS
+                try:
+                    import winsound
+                    winsound.Beep(880, 75)
+                except Exception:
+                    pass
             face = event.sub_frame is not None and event.sub_frame.size > 0
             point = None
             if face and np.all(np.isfinite(event.point)):
