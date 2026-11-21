@@ -19,7 +19,13 @@ class DwellState:
 
 
 class CursorController:
-    def __init__(self, screen_w: int, screen_h: int, move_deadzone_px: int = 8):
+    def __init__(
+        self,
+        screen_w: int,
+        screen_h: int,
+        move_deadzone_px: int = 8,
+        max_speed_px_s: int = 950,
+    ):
         self.screen_w = screen_w
         self.screen_h = screen_h
         self.paused = False
@@ -27,9 +33,16 @@ class CursorController:
         self.dwell = DwellState()
         self.last_move_at = 0.0
         self.move_deadzone_px = max(0, int(move_deadzone_px))
+        self.max_speed_px_s = max(1, int(max_speed_px_s))
+        self.direct_mode = False
         self._last_sent: tuple[int, int] | None = None
 
+    def set_direct_mode(self, enabled: bool) -> None:
+        self.direct_mode = bool(enabled)
+
     def set_paused(self, paused: bool) -> None:
+        if self.paused != paused:
+            self.last_move_at = time.perf_counter()
         self.paused = paused
         if paused and self.dragging:
             try:
@@ -50,14 +63,29 @@ class CursorController:
     def move(self, x: float, y: float) -> tuple[int, int]:
         xi, yi = self.clamp(x, y)
         if not self.paused:
-            if self._last_sent is not None:
+            now = time.perf_counter()
+            if self._last_sent is None:
+                position = pyautogui.position()
+                self._last_sent = self.clamp(position.x, position.y)
+                self.last_move_at = now
+
+            if self._last_sent is not None and not self.direct_mode:
                 dx = xi - self._last_sent[0]
                 dy = yi - self._last_sent[1]
                 if (dx * dx + dy * dy) < (self.move_deadzone_px * self.move_deadzone_px):
                     return self._last_sent
+
+                distance = (dx * dx + dy * dy) ** 0.5
+                elapsed = max(0.001, min(0.05, now - self.last_move_at))
+                max_step = self.max_speed_px_s * elapsed
+                if distance > max_step:
+                    scale = max_step / distance
+                    xi = int(round(self._last_sent[0] + dx * scale))
+                    yi = int(round(self._last_sent[1] + dy * scale))
+
             pyautogui.moveTo(xi, yi)
             self._last_sent = (xi, yi)
-            self.last_move_at = time.perf_counter()
+            self.last_move_at = now
         return xi, yi
 
     def perform_action(self, action: str) -> str:

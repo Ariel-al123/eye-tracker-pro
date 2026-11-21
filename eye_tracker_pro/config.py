@@ -38,11 +38,12 @@ class AppConfig:
     filter_min_cutoff: float = 1.0
     filter_beta: float = 0.025
     filter_d_cutoff: float = 1.0
-    move_deadzone_px: int = 2
+    move_deadzone_px: int = 20
+    cursor_max_speed_px_s: int = 950
 
     # Dwell click
     dwell_enabled: bool = True
-    dwell_time_ms: int = 750
+    dwell_time_ms: int = 450
     dwell_radius_px: int = 35
     dwell_cooldown_ms: int = 700
 

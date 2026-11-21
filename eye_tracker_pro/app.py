@@ -36,7 +36,12 @@ class EyeTrackerApp:
         self.base_dir = base_dir
         self.cfg: AppConfig = load_config(base_dir)
         self.screen_w, self.screen_h = pyautogui.size()
-        self.controller = CursorController(self.screen_w, self.screen_h, self.cfg.move_deadzone_px)
+        self.controller = CursorController(
+            self.screen_w,
+            self.screen_h,
+            self.cfg.move_deadzone_px,
+            self.cfg.cursor_max_speed_px_s,
+        )
         self.mapper = GazeMapper()
         self.filter = PointFilter(self.cfg.filter_min_cutoff, self.cfg.filter_beta, self.cfg.filter_d_cutoff)
 
@@ -388,30 +393,31 @@ class EyeTrackerApp:
             fy = cy + (fy - cy) * float(self.cfg.fine_gain_y) + float(self.cfg.fine_offset_y)
 
         ix, iy = self.controller.clamp(fx, fy)
+        cursor_x, cursor_y = ix, iy
 
         if self.cfg.move_cursor_enabled and not self.controller.paused:
-            self.controller.move(ix, iy)
+            cursor_x, cursor_y = self.controller.move(ix, iy)
 
         dwell_progress = 0.0
         action_target = None
         if self.overlay:
-            btn = self.overlay.button_at(ix, iy)
+            btn = self.overlay.button_at(cursor_x, cursor_y)
             if btn is not None:
-                dwell_progress = self.controller.dwell_progress(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
-                if self.controller.dwell_ready(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
+                dwell_progress = self.controller.dwell_progress(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
+                if self.controller.dwell_ready(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
                     action_target = btn.action
             else:
                 # regular dwell click on screen (optional): only if enabled and no button
                 if self.cfg.dwell_enabled and not self.controller.paused:
-                    dwell_progress = self.controller.dwell_progress(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
-                    if self.controller.dwell_ready(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
+                    dwell_progress = self.controller.dwell_progress(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
+                    if self.controller.dwell_ready(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
                         action_target = "left_click"
                 else:
                     self.controller.dwell.active = False
         else:
             if self.cfg.dwell_enabled and not self.controller.paused:
-                dwell_progress = self.controller.dwell_progress(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
-                if self.controller.dwell_ready(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
+                dwell_progress = self.controller.dwell_progress(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
+                if self.controller.dwell_ready(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
                     action_target = "left_click"
 
         if action_target:
@@ -419,7 +425,7 @@ class EyeTrackerApp:
 
         if not self.controller.paused and self._gaze_ready():
             self.status = "Mirada activa"
-        return (ix, iy), dwell_progress
+        return (cursor_x, cursor_y), dwell_progress
 
     def _gaze_ready(self) -> bool:
         if self.eye_theia:
@@ -470,7 +476,7 @@ class EyeTrackerApp:
         cv2.putText(view, ft, (20, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.65, ft_color, 2, cv2.LINE_AA)
         if self.fine_tune_mode:
             cv2.putText(view, "A/D ox  W/S oy  J/L gx  I/K gy  R reset  F/ESC salir", (20, h - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(view, "C=calibrar  P=pausa  M=mouse  F=ajuste fino  ESC=salir", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 200), 2, cv2.LINE_AA)
+        cv2.putText(view, "C=calibrar  P=pausa  M=modo directo/suave  F=ajuste fino  ESC=salir", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 200), 2, cv2.LINE_AA)
         return view
 
     def run(self) -> None:
@@ -632,8 +638,13 @@ class EyeTrackerApp:
                     self.controller.toggle_pause()
                     self.status = "Pausado" if self.controller.paused else "Mirada activa"
                 elif key in (ord('m'), ord('M')):
-                    self.cfg.move_cursor_enabled = not self.cfg.move_cursor_enabled
-                    self.status = f"Movimiento cursor: {'ON' if self.cfg.move_cursor_enabled else 'OFF'}"
+                    self.cfg.move_cursor_enabled = True
+                    self.controller.set_direct_mode(not self.controller.direct_mode)
+                    self.status = (
+                        "Modo directo: igual que la calibracion"
+                        if self.controller.direct_mode
+                        else "Modo suave: zona muerta y velocidad limitada"
+                    )
                 elif key in (ord('f'), ord('F')):
                     self.fine_tune_mode = not self.fine_tune_mode
                     self.status = "Ajuste fino: ON (WASD offset, IJKL gain, R reset)" if self.fine_tune_mode else "Ajuste fino: OFF"
