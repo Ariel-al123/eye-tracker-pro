@@ -1,8 +1,6 @@
-# Eye Tracker Pro — versión definitiva (`fast`)
+# Eye Tracker Pro 
 
-Sistema de control por mirada con webcam para navegar la computadora sin usar las manos. Esta rama conserva la **interfaz y el sistema de escritura** de `fast` (overlay Tk, teclado en pantalla, sugerencias, ajustes, información y modo juego) e integra el **mejor seguimiento y calibración** de `debug/screenpipe-eye-tracking` (EyeGestures de 25 puntos, zonas muertas/velocidad, marcador de mirada y motor EyeTheia opcional).
-
-> **Nota honesta**: no reemplaza un producto comercial como Beam Eye Tracker. Es una base local, configurable y en desarrollo activo.
+Esta enfocada para personas con alguna discapacidad con tiene dificultad para poder manejar su computadora como por ejemplo personas con inicios con Parkinson
 
 ## Qué incluye
 
