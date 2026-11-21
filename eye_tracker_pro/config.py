@@ -28,15 +28,15 @@ class AppConfig:
 
     # Calibration
     calibration_points: int = 9  # 5 or 9
-    calibration_samples_per_point: int = 25
+    calibration_samples_per_point: int = 40
     calibration_sample_delay_ms: int = 40
     calibration_point_radius: int = 22
 
     # Smoothing / filter
-    filter_min_cutoff: float = 0.7
-    filter_beta: float = 0.005
+    filter_min_cutoff: float = 1.0
+    filter_beta: float = 0.025
     filter_d_cutoff: float = 1.0
-    move_deadzone_px: int = 8
+    move_deadzone_px: int = 2
 
     # Dwell click
     dwell_enabled: bool = True
@@ -48,6 +48,14 @@ class AppConfig:
     pause_on_face_lost: bool = True
     face_lost_pause_ms: int = 700
     move_cursor_enabled: bool = True
+
+    # Fine adjustment (applied after gaze prediction)
+    fine_gain_x: float = 1.0
+    fine_gain_y: float = 1.0
+    fine_offset_x: float = 0.0
+    fine_offset_y: float = 0.0
+    fine_step_px: int = 10
+    fine_gain_step: float = 0.02
 
     # UI
     overlay_enabled: bool = True

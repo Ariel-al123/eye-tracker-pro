@@ -61,8 +61,18 @@ O en Windows: doble clic en `run.bat`.
 - `C`: iniciar/reiniciar calibración.
 - `P`: pausar/reanudar control.
 - `M`: activar/desactivar movimiento del cursor.
-- `ESC`: cancelar calibración o salir.
+- `F`: activar/desactivar modo de ajuste fino.
+- `ESC`: cancelar calibración, salir del ajuste fino, o salir.
 - Barra de botones: mira un botón hasta completar el dwell para activar la acción.
+
+### Modo ajuste fino (cuando `F` está activo)
+
+- `A/D`: offset horizontal (`fine_offset_x`) -/+
+- `W/S`: offset vertical (`fine_offset_y`) -/+
+- `J/L`: ganancia horizontal (`fine_gain_x`) -/+
+- `I/K`: ganancia vertical (`fine_gain_y`) +/-
+- `R`: resetear ajuste fino a valores por defecto
+- `F` o `ESC`: salir del modo ajuste fino
 
 ## Calibración (recomendado)
 
@@ -82,8 +92,11 @@ Edita `config.json`:
 - `filter_min_cutoff`, `filter_beta`: suavizado (menos jitter = min_cutoff más bajo; más latencia).
 - `buttons`: lista de botones personalizables.
 
+- `fine_gain_x`, `fine_gain_y`, `fine_offset_x`, `fine_offset_y`: ajuste fino manual.
+- `fine_step_px`, `fine_gain_step`: tamaño de paso del ajuste fino.
+
 Acciones de botón soportadas:
-`left_click`, `right_click`, `double_click`, `scroll_up`, `scroll_down`, `drag_toggle`, `pause`, `calibrate`.
+`left_click`, `right_click`, `double_click`, `scroll_up`, `scroll_down`, `drag_toggle`, `pause`, `calibrate`, `fine_tune`.
 
 Ejemplo de botón:
 

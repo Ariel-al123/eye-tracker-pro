@@ -45,6 +45,7 @@ class EyeTrackerApp:
         self.calib_samples: list[np.ndarray] = []
         self.calib_point_started_at = 0.0
         self.last_face_seen_at = 0.0
+        self.fine_tune_mode = False
         self.status = "Presiona C para calibrar"
 
     def _open_camera(self) -> None:
@@ -104,13 +105,14 @@ class EyeTrackerApp:
         cv2.putText(canvas, "Mantén la cabeza estable. ESC cancela.", (60, 115), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (180, 180, 180), 2, cv2.LINE_AA)
 
         # settle period
-        settle = 0.7
+        settle = 1.0
         elapsed = time.perf_counter() - self.calib_point_started_at
         if elapsed < settle:
             cv2.putText(canvas, "Preparando...", (60, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 200, 255), 2, cv2.LINE_AA)
             return canvas
 
-        if feats.face_detected:
+        eyes_open = feats.left_eye_open > 0.08 and feats.right_eye_open > 0.08
+        if feats.face_detected and eyes_open:
             self.calib_samples.append(feats.feature.copy())
             progress = len(self.calib_samples) / max(1, self.cfg.calibration_samples_per_point)
             bar_w = 500
@@ -135,6 +137,10 @@ class EyeTrackerApp:
         if action == "calibrate":
             self.start_calibration()
             return
+        if action == "fine_tune":
+            self.fine_tune_mode = not self.fine_tune_mode
+            self.status = "Ajuste fino: ON" if self.fine_tune_mode else "Ajuste fino: OFF"
+            return
         result = self.controller.perform_action(action)
         if action == "pause":
             self.status = "Pausado" if self.controller.paused else "Mirada activa"
@@ -144,11 +150,17 @@ class EyeTrackerApp:
     def _process_gaze(self, feats: GazeFeatures) -> tuple[Optional[tuple[int, int]], float]:
         now = time.perf_counter()
         if not feats.face_detected:
+            self.filter.reset()
+            self.controller.dwell.active = False
             if self.cfg.pause_on_face_lost and (now - self.last_face_seen_at) * 1000 > self.cfg.face_lost_pause_ms:
                 self.status = "Rostro no detectado - cursor en pausa"
             return None, 0.0
 
         self.last_face_seen_at = now
+        # Do not let a blink or a nearly closed eyelid pull the cursor.
+        if feats.left_eye_open <= 0.08 or feats.right_eye_open <= 0.08:
+            self.controller.dwell.active = False
+            return None, 0.0
         pred = self.mapper.predict(feats.feature)
         if pred is None:
             self.status = "Sin calibración. Presiona C."
@@ -158,6 +170,12 @@ class EyeTrackerApp:
         sx = max(0, min(self.screen_w - 1, sx))
         sy = max(0, min(self.screen_h - 1, sy))
         fx, fy = self.filter.filter(sx, sy, now)
+
+        # Fine adjustment: gain around center + offset
+        cx, cy = self.screen_w / 2.0, self.screen_h / 2.0
+        fx = cx + (fx - cx) * float(self.cfg.fine_gain_x) + float(self.cfg.fine_offset_x)
+        fy = cy + (fy - cy) * float(self.cfg.fine_gain_y) + float(self.cfg.fine_offset_y)
+
         ix, iy = self.controller.clamp(fx, fy)
 
         if self.cfg.move_cursor_enabled and not self.controller.paused:
@@ -203,7 +221,12 @@ class EyeTrackerApp:
         cv2.putText(view, f"Mouse: {'OFF' if self.controller.paused else 'ON'}", (20, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if not self.controller.paused else (0, 165, 255), 2, cv2.LINE_AA)
         if gaze:
             cv2.putText(view, f"Gaze: {gaze[0]},{gaze[1]} dwell {int(dwell*100)}%", (20, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 2, cv2.LINE_AA)
-        cv2.putText(view, "C=calibrar  P=pausa  M=mouse  ESC=salir", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 200), 2, cv2.LINE_AA)
+        ft = f"FINE gx={self.cfg.fine_gain_x:.2f} gy={self.cfg.fine_gain_y:.2f} ox={int(self.cfg.fine_offset_x)} oy={int(self.cfg.fine_offset_y)}"
+        ft_color = (0, 255, 255) if self.fine_tune_mode else (160, 160, 160)
+        cv2.putText(view, ft, (20, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.65, ft_color, 2, cv2.LINE_AA)
+        if self.fine_tune_mode:
+            cv2.putText(view, "A/D ox  W/S oy  J/L gx  I/K gy  R reset  F/ESC salir", (20, h - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(view, "C=calibrar  P=pausa  M=mouse  F=ajuste fino  ESC=salir", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (200, 200, 200), 2, cv2.LINE_AA)
         return view
 
     def run(self) -> None:
@@ -249,12 +272,17 @@ class EyeTrackerApp:
                 preview = self._draw_preview(frame, feats, gaze, dwell)
                 cv2.imshow("EyeTrackerPro - Preview", preview)
 
-                key = cv2.waitKey(1) & 0xFF
+                key_raw = cv2.waitKeyEx(1)
+                key = key_raw & 0xFF if key_raw != -1 else -1
+
                 if key == 27:  # ESC
                     if self.calibrating:
                         self.calibrating = False
                         self.status = "Calibración cancelada"
                         self.controller.set_paused(True)
+                    elif self.fine_tune_mode:
+                        self.fine_tune_mode = False
+                        self.status = "Ajuste fino desactivado"
                     else:
                         self.running = False
                 elif key in (ord('c'), ord('C')):
@@ -265,6 +293,37 @@ class EyeTrackerApp:
                 elif key in (ord('m'), ord('M')):
                     self.cfg.move_cursor_enabled = not self.cfg.move_cursor_enabled
                     self.status = f"Movimiento cursor: {'ON' if self.cfg.move_cursor_enabled else 'OFF'}"
+                elif key in (ord('f'), ord('F')):
+                    self.fine_tune_mode = not self.fine_tune_mode
+                    self.status = "Ajuste fino: ON (WASD offset, IJKL gain, R reset)" if self.fine_tune_mode else "Ajuste fino: OFF"
+                elif self.fine_tune_mode:
+                    step = int(self.cfg.fine_step_px)
+                    gstep = float(self.cfg.fine_gain_step)
+                    if key in (ord('a'), ord('A')):  # offset X -
+                        self.cfg.fine_offset_x -= step
+                    elif key in (ord('d'), ord('D')):  # offset X +
+                        self.cfg.fine_offset_x += step
+                    elif key in (ord('w'), ord('W')):  # offset Y -
+                        self.cfg.fine_offset_y -= step
+                    elif key in (ord('s'), ord('S')):  # offset Y +
+                        self.cfg.fine_offset_y += step
+                    elif key in (ord('j'), ord('J')):  # gain X -
+                        self.cfg.fine_gain_x = max(0.5, round(self.cfg.fine_gain_x - gstep, 3))
+                    elif key in (ord('l'), ord('L')):  # gain X +
+                        self.cfg.fine_gain_x = min(2.0, round(self.cfg.fine_gain_x + gstep, 3))
+                    elif key in (ord('i'), ord('I')):  # gain Y +
+                        self.cfg.fine_gain_y = min(2.0, round(self.cfg.fine_gain_y + gstep, 3))
+                    elif key in (ord('k'), ord('K')):  # gain Y -
+                        self.cfg.fine_gain_y = max(0.5, round(self.cfg.fine_gain_y - gstep, 3))
+                    elif key in (ord('r'), ord('R')):
+                        self.cfg.fine_gain_x = 1.0
+                        self.cfg.fine_gain_y = 1.0
+                        self.cfg.fine_offset_x = 0.0
+                        self.cfg.fine_offset_y = 0.0
+                    self.status = (
+                        f"Ajuste fino gx={self.cfg.fine_gain_x:.2f} gy={self.cfg.fine_gain_y:.2f} "
+                        f"ox={self.cfg.fine_offset_x:.0f} oy={self.cfg.fine_offset_y:.0f}"
+                    )
         finally:
             self.cleanup()
 

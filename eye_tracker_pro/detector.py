@@ -26,7 +26,7 @@ NOSE_TIP = 1
 
 @dataclass
 class GazeFeatures:
-    feature: np.ndarray  # shape (8,)
+    feature: np.ndarray  # gaze and normalized head-pose features
     face_detected: bool
     left_eye_open: float
     right_eye_open: float
@@ -88,7 +88,7 @@ class FaceLandmarkerDetector:
         results = self.landmarker.detect_for_video(mp_image, timestamp_ms)
 
         if not results.face_landmarks or len(results.face_landmarks[0]) < 478:
-            return GazeFeatures(feature=np.zeros(8, dtype=np.float32), face_detected=False,
+            return GazeFeatures(feature=np.zeros(11, dtype=np.float32), face_detected=False,
                                 left_eye_open=0.0, right_eye_open=0.0)
 
         lm = results.face_landmarks[0]
@@ -123,6 +123,10 @@ class FaceLandmarkerDetector:
         avg_x = (lnx + rnx) / 2.0
         avg_y = (lny + rny) / 2.0
 
-        feat = np.array([avg_x, avg_y, lnx, lny, rnx, rny, nose_nx, nose_ny], dtype=np.float32)
+        head_x = float(face_cx / max(w, 1))
+        head_y = float(face_cy / max(h, 1))
+        face_scale = float(face_w / max(w, 1))
+        feat = np.array([avg_x, avg_y, lnx, lny, rnx, rny, nose_nx, nose_ny,
+                         head_x, head_y, face_scale], dtype=np.float32)
         return GazeFeatures(feature=feat, face_detected=True,
                             left_eye_open=l_open, right_eye_open=r_open, landmarks=lm)
