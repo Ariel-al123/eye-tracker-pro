@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+from pathlib import Path
 from typing import Optional
 import time
 
@@ -24,9 +26,10 @@ class EyeGesturesFrame:
 class EyeGesturesEngine:
     """Adapter for EyeGestures 3.x, which supports the project's Python 3.11."""
 
-    def __init__(self, screen_width: int, screen_height: int):
+    def __init__(self, screen_width: int, screen_height: int, calibration_path: Optional[Path] = None):
         self._screen_width = screen_width
         self._screen_height = screen_height
+        self._calibration_path = calibration_path
         self._engine = self._new_tracker()
         self.calibrating = False
         self.ready = False
@@ -36,6 +39,7 @@ class EyeGesturesEngine:
         self.last_error: Optional[str] = None
         self._reported_error: Optional[str] = None
         self.last_frame = EyeGesturesFrame(False, None, None, 0, False)
+        self._load_calibration()
 
     @staticmethod
     def _new_tracker():
@@ -95,15 +99,71 @@ class EyeGesturesEngine:
         self.completed_points = 0
         self._collect_after = time.monotonic() + EYE_GESTURES_POINT_DELAY_SECONDS
 
-    def finish_calibration(self) -> None:
+    def finish_calibration(self) -> bool:
         self.calibrating = False
         self.ready = True
+        if self.completed_points >= self.total_points:
+            return self.save_calibration()
+        return False
 
     def cancel_calibration(self) -> None:
         self.calibrating = False
         self.ready = False
         self.completed_points = 0
         self._collect_after = 0.0
+
+    def _load_calibration(self) -> None:
+        path = self._calibration_path
+        if path is None or not path.is_file():
+            return
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if data.get("format") != 1:
+                return
+            calibrator = self._engine.clb["eye-tracker-pro"]
+            scale_x = self._screen_width / max(1, int(data["screen_width"]))
+            scale_y = self._screen_height / max(1, int(data["screen_height"]))
+            for axis, scale in (("x", scale_x), ("y", scale_y)):
+                coefficients = np.asarray(data[f"coef_{axis}"], dtype=np.float64)
+                if coefficients.ndim != 1 or coefficients.size == 0:
+                    return
+                regressor = getattr(calibrator, f"reg_{axis}")
+                regressor.coef_ = coefficients * scale
+                regressor.intercept_ = float(data[f"intercept_{axis}"]) * scale
+                regressor.n_features_in_ = int(coefficients.size)
+            if calibrator.reg_x.n_features_in_ != calibrator.reg_y.n_features_in_:
+                return
+            calibrator.fitted = True
+            self.ready = True
+            self.completed_points = self.total_points
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            print(f"No se pudo cargar la calibracion guardada: {exc}", flush=True)
+
+    def save_calibration(self) -> bool:
+        path = self._calibration_path
+        if path is None:
+            return False
+        try:
+            calibrator = self._engine.clb["eye-tracker-pro"]
+            if not calibrator.fitted:
+                return False
+            data = {
+                "format": 1,
+                "screen_width": self._screen_width,
+                "screen_height": self._screen_height,
+                "coef_x": np.asarray(calibrator.reg_x.coef_, dtype=np.float64).tolist(),
+                "intercept_x": float(np.asarray(calibrator.reg_x.intercept_).reshape(-1)[0]),
+                "coef_y": np.asarray(calibrator.reg_y.coef_, dtype=np.float64).tolist(),
+                "intercept_y": float(np.asarray(calibrator.reg_y.intercept_).reshape(-1)[0]),
+            }
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(path.suffix + ".tmp")
+            temporary.write_text(json.dumps(data), encoding="utf-8")
+            temporary.replace(path)
+            return True
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            print(f"No se pudo guardar la calibracion: {exc}", flush=True)
+            return False
 
     def close(self) -> None:
         finder = getattr(self._engine, "finder", None)

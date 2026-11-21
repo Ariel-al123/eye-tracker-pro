@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import time
+import os
+import ctypes
+from ctypes import wintypes
 from pathlib import Path
 from typing import Optional
 
@@ -45,7 +48,11 @@ class EyeTrackerApp:
         elif self.cfg.gaze_engine.lower() == "eyegestures":
             self.eye_theia = None
             self.detector = None
-            self.eye_gestures = EyeGesturesEngine(self.screen_w, self.screen_h)
+            self.eye_gestures = EyeGesturesEngine(
+                self.screen_w,
+                self.screen_h,
+                base_dir / "eye_gestures_calibration.json",
+            )
         else:
             self.eye_theia = None
             self.eye_gestures = None
@@ -67,8 +74,13 @@ class EyeTrackerApp:
         self.last_face_seen_at = 0.0
         self.paused_by_face_loss = False
         self.fine_tune_mode = False
-        self.status = "Presiona C para calibrar"
+        self.status = (
+            "Calibracion guardada. Mirada activa."
+            if self.eye_gestures and self.eye_gestures.ready
+            else "Presiona C para calibrar"
+        )
         self.calibration_window_created = False
+        self._previous_hotkeys: set[int] = set()
 
     def _open_camera(self) -> None:
         configured = max(0, int(self.cfg.camera_index))
@@ -146,11 +158,14 @@ class EyeTrackerApp:
     def start_calibration(self) -> None:
         if self.eye_gestures:
             if self.calibrating:
-                self.eye_gestures.finish_calibration()
+                saved = self.eye_gestures.finish_calibration()
                 self.calibrating = False
                 self.filter.reset()
                 self.controller.set_paused(False)
-                self.status = "Calibracion terminada. Mirada activa."
+                self.status = (
+                    "Calibracion guardada. Mirada activa."
+                    if saved else "Calibracion terminada. Mirada activa."
+                )
             else:
                 self.eye_gestures.start_calibration()
                 self.calibrating = True
@@ -292,6 +307,32 @@ class EyeTrackerApp:
             self.status = "Pausado" if self.controller.paused else "Mirada activa"
         elif result not in {"ignored_paused"}:
             self.status = f"Acción: {action}"
+
+    def _poll_keyboard(self) -> int:
+        """Poll hotkeys so several OpenCV windows do not swallow key presses."""
+        if os.name != "nt":
+            return -1
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        user32.GetAsyncKeyState.argtypes = [ctypes.c_int]
+        user32.GetAsyncKeyState.restype = ctypes.c_short
+        foreground = user32.GetForegroundWindow()
+        process_id = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(foreground, ctypes.byref(process_id))
+        keys = (27, ord("C"), ord("P"), ord("M"), ord("F"), ord("A"), ord("D"),
+                ord("W"), ord("S"), ord("J"), ord("L"), ord("I"), ord("K"), ord("R"))
+        down = {key for key in keys if user32.GetAsyncKeyState(key) & 0x8000}
+        pressed = down - self._previous_hotkeys
+        self._previous_hotkeys = down
+        if process_id.value != os.getpid():
+            return -1
+        for key in keys:
+            if key in pressed:
+                return key
+        return -1
 
     def _process_gaze(self, feats: GazeFeatures) -> tuple[Optional[tuple[int, int]], float]:
         now = time.perf_counter()
@@ -476,11 +517,15 @@ class EyeTrackerApp:
                     )
                     if self.calibrating:
                         if self.eye_gestures.completed_points >= self.eye_gestures.total_points:
-                            self.eye_gestures.finish_calibration()
+                            saved = self.eye_gestures.finish_calibration()
                             self.calibrating = False
                             self.filter.reset()
                             self.controller.set_paused(False)
-                            self.status = "Calibracion completa. Cursor activo."
+                            self.status = (
+                                "Calibracion guardada. Cursor activo."
+                                if saved
+                                else "Calibracion completa. Cursor activo."
+                            )
                         else:
                             self.status = (
                                 f"EyeGestures: {self.eye_gestures.completed_points + 1}/"
@@ -547,7 +592,26 @@ class EyeTrackerApp:
                 cv2.imshow("EyeTrackerPro - Preview", preview)
 
                 key_raw = cv2.waitKeyEx(1)
-                key = key_raw & 0xFF if key_raw != -1 else -1
+                key = self._poll_keyboard()
+                if key == -1 and os.name != "nt":
+                    key = key_raw & 0xFF if key_raw != -1 else -1
+
+                try:
+                    if cv2.getWindowProperty("EyeTrackerPro - Preview", cv2.WND_PROP_VISIBLE) < 1:
+                        self.running = False
+                except cv2.error:
+                    pass
+                if self.calibrating:
+                    try:
+                        if cv2.getWindowProperty("EyeTrackerPro - Calibracion", cv2.WND_PROP_VISIBLE) < 1:
+                            self.running = False
+                    except cv2.error:
+                        pass
+
+                if self.overlay:
+                    clicked_action = self.overlay.consume_action()
+                    if clicked_action:
+                        self._handle_action(clicked_action)
 
                 if key == 27:  # ESC
                     if self.calibrating:

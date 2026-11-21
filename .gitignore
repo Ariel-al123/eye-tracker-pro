@@ -4,3 +4,4 @@ __pycache__/
 .uv-cache/
 .uv-python/
 .screenpipe-tools/
+eye_gestures_calibration.json

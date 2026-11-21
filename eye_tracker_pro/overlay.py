@@ -31,6 +31,7 @@ class OverlayWindow:
         self.height = max((b.y + b.h for b in self.buttons), default=100) + 55
         self.visible = True
         self._created = False
+        self._pending_action: Optional[str] = None
 
     def create(self) -> None:
         if self._created:
@@ -42,7 +43,21 @@ class OverlayWindow:
             cv2.setWindowProperty(self.window_name, cv2.WND_PROP_TOPMOST, 1)
         except Exception:
             pass
+        cv2.setMouseCallback(self.window_name, self._on_mouse)
         self._created = True
+
+    def _on_mouse(self, event: int, x: int, y: int, _flags: int, _param: object) -> None:
+        if event != cv2.EVENT_LBUTTONDOWN:
+            return
+        for button in self.buttons:
+            if button.x <= x <= button.x + button.w and button.y <= y <= button.y + button.h:
+                self._pending_action = button.action
+                return
+
+    def consume_action(self) -> Optional[str]:
+        action = self._pending_action
+        self._pending_action = None
+        return action
 
     def button_at(self, screen_x: int, screen_y: int) -> Optional[ButtonConfig]:
         lx, ly = screen_x - self.win_x, screen_y - self.win_y
