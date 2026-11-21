@@ -2,6 +2,16 @@
 
 > **Branch `feature-eyetheia-gaze`:** esta version usa el modelo profundo iTracker de EyeTheia y ajuste personalizado con los nueve puntos. Antes de ejecutar, instala `requirements-eyetheia.txt` y sigue la guia [EYETHEIA.md](EYETHEIA.md). El motor anterior sigue disponible con `gaze_engine: "mediapipe"` en `config.json`.
 
+El motor seleccionado por defecto en esta rama es EyeGestures 3.2.4. Instálalo en el entorno Python 3.11 del proyecto con:
+
+```powershell
+uv pip install --cache-dir .uv-cache --python .venv\Scripts\python.exe -r requirements-eyegestures.txt
+```
+
+En `config.json` puedes cambiar `gaze_engine` entre `eyegestures`, `eyetheia` y `mediapipe`. EyeGestures usa su calibración interna: pulsa `C`, sigue los puntos que presenta y pulsa `C` otra vez para terminar. Para EyeTheia instala además `requirements-eyetheia.txt`.
+
+EyeGestures 3.2.4 se usa porque admite Python 3.11; la versión 4.x requiere Python 3.13 según sus metadatos de PyPI y cambió la API. EyeGestures está bajo GPLv3. Revisa las obligaciones de esa licencia antes de distribuir una aplicación que lo incluya.
+
 Prototipo robusto de control por mirada para navegación básica de computadora, pensado para personas con movilidad limitada en manos/brazos. Usa webcam, MediaPipe Face Landmarker, calibración por puntos, suavizado One Euro Filter, dwell click y una barra de botones configurables.
 
 > **Nota honesta**: esto no reemplaza un producto comercial pulido como Beam Eye Tracker. Es una base mucho más limpia y robusta que los prototipos anteriores, diseñada para iterar rápido.

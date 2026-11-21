@@ -1,8 +1,8 @@
 {
-  "gaze_engine": "eyetheia",
+  "gaze_engine": "eyegestures",
   "camera_index": 0,
-  "camera_width": 1280,
-  "camera_height": 720,
+  "camera_width": 640,
+  "camera_height": 480,
   "show_preview": true,
   "mirror_preview": true,
   "calibration_points": 9,

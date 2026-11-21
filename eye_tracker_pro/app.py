@@ -15,6 +15,7 @@ from .filter import PointFilter
 from .mapper import GazeMapper
 from .overlay import OverlayWindow
 from .eyetheia_engine import EyeTheiaEngine
+from .eyegestures_engine import EyeGesturesEngine
 
 
 CALIB_5 = [(0.05, 0.05), (0.95, 0.05), (0.5, 0.5), (0.05, 0.95), (0.95, 0.95)]
@@ -38,10 +39,17 @@ class EyeTrackerApp:
         if self.cfg.gaze_engine.lower() == "eyetheia":
             self.eye_theia = EyeTheiaEngine(base_dir, self.screen_w, self.screen_h)
             self.detector = None
+            self.eye_gestures = None
+        elif self.cfg.gaze_engine.lower() == "eyegestures":
+            self.eye_theia = None
+            self.detector = None
+            self.eye_gestures = EyeGesturesEngine(self.screen_w, self.screen_h)
         else:
             self.eye_theia = None
+            self.eye_gestures = None
             self.detector = FaceLandmarkerDetector(model_path)
         self.eye_observation = None
+        self.eye_gestures_point = None
         self.overlay = OverlayWindow(self.cfg.buttons) if self.cfg.overlay_enabled else None
 
         self.cap: Optional[cv2.VideoCapture] = None
@@ -59,20 +67,58 @@ class EyeTrackerApp:
         self.status = "Presiona C para calibrar"
 
     def _open_camera(self) -> None:
-        self.cap = cv2.VideoCapture(self.cfg.camera_index, cv2.CAP_DSHOW)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.camera_width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.camera_height)
-        self.cap.set(cv2.CAP_PROP_FPS, 30)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        if not self.cap.isOpened():
-            # fallback without DSHOW
-            self.cap = cv2.VideoCapture(self.cfg.camera_index)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.camera_width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.camera_height)
-            self.cap.set(cv2.CAP_PROP_FPS, 30)
-            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        if not self.cap.isOpened():
-            raise RuntimeError("No se pudo abrir la cámara. Verifica permisos/conexión.")
+        configured = max(0, int(self.cfg.camera_index))
+        camera_indices = [configured] + [i for i in range(6) if i != configured]
+        black_indices: list[int] = []
+
+        for index in camera_indices:
+            cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+            if not cap.isOpened():
+                cap.release()
+                cap = cv2.VideoCapture(index)
+            if not cap.isOpened():
+                cap.release()
+                continue
+
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.camera_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.camera_height)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+            frame = None
+            for _ in range(8):
+                ok, candidate = cap.read()
+                if ok and candidate is not None:
+                    frame = candidate
+                time.sleep(0.04)
+
+            if frame is None:
+                cap.release()
+                continue
+
+            # Some virtual/blocked cameras report isOpened=True but return a black image.
+            if float(frame.mean()) < 1.0 and float(frame.std()) < 1.5:
+                black_indices.append(index)
+                cap.release()
+                continue
+
+            self.cap = cap
+            self.cfg.camera_index = index
+            return
+
+        if black_indices:
+            indexes = ", ".join(str(i) for i in black_indices)
+            raise RuntimeError(
+                f"Camara(s) {indexes} abre(n), pero envia(n) imagen negra. "
+                "Activa la camara fisica, quita la tapa de privacidad y permite el acceso "
+                "en Configuracion de Windows > Privacidad y seguridad > Camara."
+            )
+        raise RuntimeError(
+            "Windows no ofrece una camara que OpenCV pueda abrir "
+            f"(indices revisados: {', '.join(map(str, camera_indices))}). "
+            "Conecta/activa la webcam y revisa Configuracion de Windows > "
+            "Privacidad y seguridad > Camara."
+        )
 
     def _calibration_targets(self) -> list[tuple[int, int]]:
         pts = CALIB_9 if self.cfg.calibration_points >= 9 else CALIB_5
@@ -80,6 +126,19 @@ class EyeTrackerApp:
         return [(int(x * self.screen_w), int(y * self.screen_h)) for x, y in pts]
 
     def start_calibration(self) -> None:
+        if self.eye_gestures:
+            if self.calibrating:
+                self.eye_gestures.finish_calibration()
+                self.calibrating = False
+                self.filter.reset()
+                self.controller.set_paused(False)
+                self.status = "Calibración EyeGestures terminada. Mirada activa."
+            else:
+                self.eye_gestures.start_calibration()
+                self.calibrating = True
+                self.controller.set_paused(True)
+                self.status = "EyeGestures: fija la mirada en cada punto y presiona C al terminar"
+            return
         if self.eye_theia and self.eye_theia.training:
             self.status = "Espera a que termine la personalización de EyeTheia."
             return
@@ -239,6 +298,8 @@ class EyeTrackerApp:
                 self.status = "Personalizando EyeTheia..."
                 return None, 0.0
             pred = self.eye_theia.predict(self.eye_observation) if self.eye_observation else None
+        elif self.eye_gestures:
+            pred = self.eye_gestures_point if self.eye_gestures.ready else None
         else:
             pred = self.mapper.predict(feats.feature)
         if pred is None:
@@ -292,6 +353,8 @@ class EyeTrackerApp:
     def _gaze_ready(self) -> bool:
         if self.eye_theia:
             return self.eye_theia.ready
+        if self.eye_gestures:
+            return self.eye_gestures.ready
         return self.mapper.calibrated
 
     def _finish_eye_theia_training_if_ready(self) -> None:
@@ -324,6 +387,8 @@ class EyeTrackerApp:
             cv2.putText(view, hint, (20, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 180, 255), 2, cv2.LINE_AA)
         elif self.eye_theia and self.eye_theia.last_detection_retry:
             cv2.putText(view, self.eye_theia.last_detection_source.upper(), (20, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 220), 2, cv2.LINE_AA)
+        elif self.eye_gestures and self.eye_gestures.last_error:
+            cv2.putText(view, "EyeGestures error - revisa la terminal", (20, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 100, 255), 2, cv2.LINE_AA)
         cv2.putText(view, f"Calibrado: {'SI' if self._gaze_ready() else 'NO'}", (20, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
         mouse_on = not self.controller.paused and self.cfg.move_cursor_enabled
         cv2.putText(view, f"Mouse: {'ON' if mouse_on else 'OFF'}", (20, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if mouse_on else (0, 165, 255), 2, cv2.LINE_AA)
@@ -338,7 +403,11 @@ class EyeTrackerApp:
         return view
 
     def run(self) -> None:
-        self._open_camera()
+        try:
+            self._open_camera()
+        except Exception:
+            self.cleanup()
+            raise
         self.running = True
         self.last_face_seen_at = time.perf_counter()
         cv2.namedWindow("EyeTrackerPro - Preview", cv2.WINDOW_NORMAL)
@@ -366,10 +435,32 @@ class EyeTrackerApp:
                         right_eye_open=observation.right_eye_open if observation else 0.0,
                     )
                     self._finish_eye_theia_training_if_ready()
+                elif self.eye_gestures:
+                    gesture_frame = self.eye_gestures.detect(frame)
+                    self.eye_gestures_point = gesture_frame.point
+                    feats = GazeFeatures(
+                        feature=np.zeros(1, dtype=np.float32),
+                        face_detected=gesture_frame.face_detected,
+                        left_eye_open=0.0 if gesture_frame.blink else 1.0,
+                        right_eye_open=0.0 if gesture_frame.blink else 1.0,
+                    )
                 else:
                     feats = self.detector.detect(frame, ts)
 
-                if self.calibrating:
+                if self.calibrating and self.eye_gestures:
+                    calib_view = np.zeros((self.screen_h, self.screen_w, 3), dtype=np.uint8)
+                    calib_view[:] = (18, 18, 18)
+                    target = self.eye_gestures.last_frame.target
+                    if target:
+                        radius = max(12, self.eye_gestures.last_frame.acceptance_radius)
+                        cv2.circle(calib_view, target, radius, (60, 60, 60), 2, cv2.LINE_AA)
+                        cv2.circle(calib_view, target, 12, (0, 0, 255), 3, cv2.LINE_AA)
+                        cv2.circle(calib_view, target, 4, (0, 0, 255), -1, cv2.LINE_AA)
+                    cv2.putText(calib_view, "Fija la mirada en el punto. Presiona C para terminar.", (50, 70), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (240, 240, 240), 2, cv2.LINE_AA)
+                    cv2.namedWindow("EyeTrackerPro - Calibracion", cv2.WND_PROP_FULLSCREEN)
+                    cv2.setWindowProperty("EyeTrackerPro - Calibracion", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+                    cv2.imshow("EyeTrackerPro - Calibracion", calib_view)
+                elif self.calibrating:
                     calib_view = self._draw_calibration(frame, feats)
                     cv2.namedWindow("EyeTrackerPro - Calibracion", cv2.WND_PROP_FULLSCREEN)
                     cv2.setWindowProperty("EyeTrackerPro - Calibracion", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
@@ -401,6 +492,8 @@ class EyeTrackerApp:
                 if key == 27:  # ESC
                     if self.calibrating:
                         self.calibrating = False
+                        if self.eye_gestures:
+                            self.eye_gestures.cancel_calibration()
                         self.status = "Calibración cancelada"
                         self.controller.set_paused(True)
                     elif self.fine_tune_mode:
@@ -466,6 +559,11 @@ class EyeTrackerApp:
         if self.eye_theia:
             try:
                 self.eye_theia.close()
+            except Exception:
+                pass
+        if self.eye_gestures:
+            try:
+                self.eye_gestures.close()
             except Exception:
                 pass
         if self.overlay:

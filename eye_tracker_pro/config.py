@@ -20,10 +20,10 @@ class ButtonConfig:
 
 @dataclass
 class AppConfig:
-    gaze_engine: str = "eyetheia"
+    gaze_engine: str = "eyegestures"
     camera_index: int = 0
-    camera_width: int = 1280
-    camera_height: int = 720
+    camera_width: int = 640
+    camera_height: int = 480
     show_preview: bool = True
     mirror_preview: bool = True
 
