@@ -45,9 +45,9 @@ class AppConfig:
 
     # Dwell click
     dwell_enabled: bool = True
-    dwell_time_ms: int = 450
-    dwell_radius_px: int = 35
-    dwell_cooldown_ms: int = 700
+    dwell_time_ms: int = 300
+    dwell_radius_px: int = 45
+    dwell_cooldown_ms: int = 500
 
     # Edge scrolling (debug branch convenience)
     edge_scroll_enabled: bool = False

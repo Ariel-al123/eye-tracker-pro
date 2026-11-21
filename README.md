@@ -78,8 +78,11 @@ Si no hay calibración guardada válida, el programa inicia la calibración auto
 - `F`: activar/desactivar ajuste fino.
 - `V`: alternar modo precisión (zona muerta menor y velocidad reducida).
 - `G`: alternar auto-scroll en bordes.
+- `X`: clic izquierdo inmediato en el punto donde está la mirada.
+- `Z`: clic derecho inmediato en el punto donde está la mirada.
 - `ESC`: cancelar calibración, salir del ajuste fino, o salir.
 - Capa de controles: mira un botón hasta completar el dwell. El triángulo superior abre/cierra el menú.
+- El programa **siempre inicia en Navegación** para que el clic por mirada funcione desde el primer momento. El modo juego se activa con el botón `⇄` del menú.
 - Teclado y sugerencias: accesibles desde la capa; las flechas cambian de página de atajos.
 - Modo juego: mira las esquinas para mover la cámara; el menú permite volver a Navegación.
 
@@ -99,9 +102,9 @@ Si no hay calibración guardada válida, el programa inicia la calibración auto
 - `gaze_engine`: `eyegestures` (por defecto), `mediapipe` o `eyetheia`.
 - `calibration_points`: `5`, `9` o `25`.
 - `move_deadzone_px` / `cursor_max_speed_px_s`: zona muerta y velocidad máxima.
-- `dwell_time_ms` / `dwell_radius_px`: tiempo y tolerancia del dwell.
+- `dwell_time_ms` / `dwell_radius_px`: tiempo y tolerancia del dwell (por defecto `300` ms y `45` px para hacer clic fácil).
 - `show_gaze_dot`: marcador flotante de mirada.
-- `overlay_mode`: `navigation` o `game` (se guarda automáticamente).
+- `overlay_mode`: se fuerza a `navigation` al iniciar; el cambio a `game` es solo temporal durante la sesión.
 - `keybind_pages`, `language`, `suggestion_history`: UI y escritura.
 - `edge_scroll_*`: auto-scroll opcional en bordes.
 

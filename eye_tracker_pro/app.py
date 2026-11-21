@@ -42,6 +42,9 @@ class EyeTrackerApp:
     def __init__(self, base_dir: Path):
         self.base_dir = base_dir
         self.cfg: AppConfig = load_config(base_dir)
+        # Always open in navigation mode: gaze clicks are available immediately.
+        # Game mode can still be toggled at runtime with the menu button.
+        self.cfg.overlay_mode = "navigation"
         self.suggestion_engine = SuggestionEngine(self.cfg.suggestion_history)
         self.screen_w, self.screen_h = pyautogui.size()
         self.controller = CursorController(
@@ -872,7 +875,7 @@ class EyeTrackerApp:
         cv2.putText(view, ft, (20, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.65, ft_color, 2, cv2.LINE_AA)
         if self.fine_tune_mode:
             cv2.putText(view, "A/D ox  W/S oy  J/L gx  I/K gy  R reset  F/ESC salir", (20, h - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(view, "C=calibrar  P=pausa  M=mouse  V=precision  G=auto-scroll  F=ajuste  ESC=salir", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 2, cv2.LINE_AA)
+        cv2.putText(view, "C=cal  P=pausa  M=mouse  X=clic  Z=clic-der  V=prec  G=scroll  F=ajuste  ESC=salir", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 2, cv2.LINE_AA)
         return view
 
     def run(self) -> None:
@@ -1025,6 +1028,12 @@ class EyeTrackerApp:
                     self._handle_action("precision_toggle")
                 elif key in (ord('g'), ord('G')):
                     self._handle_action("edge_scroll_toggle")
+                elif key in (ord('x'), ord('X')):
+                    self._handle_action("left_click")
+                    self.status = "Clic izquierdo"
+                elif key in (ord('z'), ord('Z')):
+                    self._handle_action("right_click")
+                    self.status = "Clic derecho"
                 elif key in (ord('f'), ord('F')):
                     self.fine_tune_mode = not self.fine_tune_mode
                     self.status = "Ajuste fino: ON (WASD offset, IJKL gain, R reset)" if self.fine_tune_mode else "Ajuste fino: OFF"
