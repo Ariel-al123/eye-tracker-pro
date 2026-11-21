@@ -75,16 +75,19 @@ class OverlayWindow:
         self.controls = []
         w, h = self.screen_w, self.screen_h
         s = min(w, h) / 700
-        size = max(46, int(58 * s))
+        # Bigger gaze targets: easier to hit with a noisy gaze signal.
+        size = max(64, int(78 * s))
         pad = max(8, int(10 * s))
-        menu_size = max(56, min(78, int(54 * s)))
-        menu_y = 10
+        # Keep outer groups visually glued to the screen edges.
+        edge = max(4, int(pad * 0.5))
+        menu_size = max(64, min(96, int(72 * s)))
+        menu_y = edge
         if self.mode in {"settings", "information"}:
             # Modal screens expose only their own controls and a close affordance.
-            self._control("menu_toggle", "×", "menu_toggle", 10, menu_y, menu_size, menu_size)
+            self._control("menu_toggle", "×", "menu_toggle", edge, menu_y, menu_size, menu_size)
         else:
-            self._control("menu_toggle", "◀" if self.menu_open else "▶", "menu_toggle", 10, menu_y, menu_size, menu_size)
-            menu_x = 10 + menu_size + pad
+            self._control("menu_toggle", "◀" if self.menu_open else "▶", "menu_toggle", edge, menu_y, menu_size, menu_size)
+            menu_x = edge + menu_size + pad
             if self.menu_open:
                 menu_w = max(92, int(menu_size * 1.42))
                 options = [("⚙", self._tr("settings"), "mode:settings"), ("◎", self._tr("calibrate"), "calibrate"), ("ⓘ", self._tr("info"), "mode:information")]
@@ -97,8 +100,8 @@ class OverlayWindow:
             self._control("mode_switch", f"⇄\n{mode_label}", f"mode:{target_mode}", menu_x, menu_y, mode_w, menu_size)
 
         if self.mode in {"navigation", "keyboard"}:
-            # Direction pad and movement lock, bottom left.
-            bx, by = pad * 2, h - pad * 2 - size * 3
+            # Direction pad and movement lock, pinned to bottom-left corner.
+            bx, by = edge, h - edge - (size * 3 + pad * 2)
             for name, label, dx, dy in (("up", "▲", 1, 0), ("left", "◀", 0, 1), ("right", "▶", 2, 1), ("down", "▼", 1, 2)):
                 self._control(f"nav_{name}", label, f"nav:{name}", bx + dx * size, by + dy * size, size, size)
             self._control("nav_space", self._tr("space"), "key:space", bx + size, by + size, size, size)
@@ -106,8 +109,8 @@ class OverlayWindow:
 
         elif self.mode == "game":
             # A familiar cross-shaped movement pad, separate from the camera zones.
-            game_size = max(48, int(58 * s))
-            gx = pad * 2
+            game_size = max(56, int(66 * s))
+            gx = edge
             camera_zone_h = int(h * .22)
             movement_top = menu_y + menu_size + pad + camera_zone_h + pad
             movement_bottom = h - camera_zone_h - 12 - pad
@@ -119,21 +122,21 @@ class OverlayWindow:
             self._control("game_move_down", "▼", "game_hold:s", gx + game_size, gy + game_size * 2, game_size, game_size)
 
         if self.mode == "navigation":
-            self._add_shortcuts()
-            # Tracking helpers from the debug branch, always reachable by gaze.
+            self._add_shortcuts(size, pad, edge)
+            # Tracking helpers from the debug branch, pinned to top-right corner.
             self._control(
                 "precision_toggle",
                 f"PREC\n{'ON' if self.precision_mode else 'OFF'}",
                 "precision_toggle",
-                w - size - pad, menu_y, size, menu_size,
+                w - size - edge, menu_y, size, menu_size,
             )
             self._control(
                 "edge_scroll_toggle",
                 f"SCROLL\n{'ON' if self.edge_scroll_enabled else 'OFF'}",
                 "edge_scroll_toggle",
-                w - size * 2 - pad * 2, menu_y, size, menu_size,
+                w - size * 2 - pad - edge, menu_y, size, menu_size,
             )
-            cy = h - pad * 2 - size
+            cy = h - edge - size
             keyboard_w = size * 2
             group_w = size * 2 + keyboard_w + pad * 2
             cx = (w - group_w) // 2
@@ -142,17 +145,17 @@ class OverlayWindow:
             self._control("enter", "↵\n" + self._tr("enter"), "key:enter", cx + size * 3 + pad * 2, cy, size, size)
 
         elif self.mode == "keyboard":
-            self._add_shortcuts()
+            self._add_shortcuts(size, pad, edge)
             self._add_keyboard(size)
 
         elif self.mode == "game":
             # Gaze-held camera directions at the four screen corners.
             zone_w, zone_h = int(w * .13), int(h * .22)
             camera_top = menu_y + menu_size + pad
-            corners = (("top_left", "↖", 12, camera_top, "up_left"), ("top_right", "↗", w - zone_w - 12, camera_top, "up_right"), ("bottom_left", "↙", 12, h - zone_h - 12, "down_left"), ("bottom_right", "↘", w - zone_w - 12, h - zone_h - 12, "down_right"))
+            corners = (("top_left", "↖", edge, camera_top, "up_left"), ("top_right", "↗", w - zone_w - edge, camera_top, "up_right"), ("bottom_left", "↙", edge, h - zone_h - edge, "down_left"), ("bottom_right", "↘", w - zone_w - edge, h - zone_h - edge, "down_right"))
             for name, label, x, y, direction in corners:
                 self._control(f"game_{name}", label, f"game_move:{direction}", x, y, zone_w, zone_h)
-            self._add_shortcuts(game_mode=True)
+            self._add_shortcuts(size, pad, edge, game_mode=True)
 
         elif self.mode == "settings":
             self._add_settings(size)
@@ -163,19 +166,17 @@ class OverlayWindow:
         self._build_controls()
         self.set_modal(self.mode in {"settings", "information"})
 
-    def _add_shortcuts(self, game_mode: bool = False) -> None:
+    def _add_shortcuts(self, size: int, pad: int, edge: int, game_mode: bool = False) -> None:
         w, h = self.screen_w, self.screen_h
-        size = max(58, int(82 * min(w, h) / 700))
-        pad = max(8, int(10 * min(w, h) / 700))
         pages = self.keybind_pages or [[]]
         self.page_index %= max(1, len(pages))
         if game_mode:
             grid_w, grid_h = size * 2 + pad, size * 2 + pad
             zone_w = int(w * .13)
-            x = w - zone_w - grid_w - pad * 3
+            x = w - zone_w - grid_w - pad * 2 - edge
             y = (h - grid_h) // 2
         else:
-            x, y = w - size * 3 - pad * 3, h - (size * 2 + pad) - pad * 2
+            x, y = w - edge - (size * 3 + pad * 2), h - edge - (size * 2 + pad)
         self._control("page_prev", "◀", "page:-1", x - size - pad, y + (size + pad) // 2, size, size)
         self._control("page_next", "▶", "page:1", x + 2 * (size + pad), y + (size + pad) // 2, size, size)
         for idx in range(4):

@@ -24,6 +24,7 @@ class AppConfig:
     camera_index: int = 0
     camera_width: int = 640
     camera_height: int = 480
+    camera_use_max_resolution: bool = True
     show_preview: bool = True
     mirror_preview: bool = True
 

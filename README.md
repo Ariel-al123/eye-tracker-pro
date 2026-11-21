@@ -82,6 +82,7 @@ Si no hay calibración guardada válida, el programa inicia la calibración auto
 - `Z`: clic derecho inmediato en el punto donde está la mirada.
 - `ESC`: cancelar calibración, salir del ajuste fino, o salir.
 - Capa de controles: mira un botón hasta completar el dwell. El triángulo superior abre/cierra el menú.
+- Los botones de Navegación son grandes y los grupos están pegados a los bordes: menú arriba-izquierda, precisión/scroll arriba-derecha, cruceta abajo-izquierda, atajos abajo-derecha y teclado/enter abajo-centro.
 - El programa **siempre inicia en Navegación** para que el clic por mirada funcione desde el primer momento. El modo juego se activa con el botón `⇄` del menú.
 - Teclado y sugerencias: accesibles desde la capa; las flechas cambian de página de atajos.
 - Modo juego: mira las esquinas para mover la cámara; el menú permite volver a Navegación.
@@ -99,6 +100,7 @@ Si no hay calibración guardada válida, el programa inicia la calibración auto
 
 ## Configuración (`config.json`)
 
+- `camera_use_max_resolution`: si está en `true` (por defecto), el programa consulta a la cámara y usa el mayor tamaño de frame que el driver acepta. Ponlo en `false` para usar `camera_width` / `camera_height` fijos.
 - `gaze_engine`: `eyegestures` (por defecto), `mediapipe` o `eyetheia`.
 - `calibration_points`: `5`, `9` o `25`.
 - `move_deadzone_px` / `cursor_max_speed_px_s`: zona muerta y velocidad máxima.

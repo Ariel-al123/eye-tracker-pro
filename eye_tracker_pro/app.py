@@ -144,6 +144,17 @@ class EyeTrackerApp:
             if not cap.isOpened():
                 cap.release()
                 continue
+            if self.cfg.camera_use_max_resolution:
+                # Ask the backend for the largest frame it will accept, then
+                # trust the size it reports back instead of the config fallback.
+                for probe in (100000, 8192, 4096):
+                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, probe)
+                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, probe)
+                    probe_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                    probe_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+                    if probe_w > 0 and probe_h > 0:
+                        self.cfg.camera_width, self.cfg.camera_height = probe_w, probe_h
+                        break
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.camera_width)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.camera_height)
             cap.set(cv2.CAP_PROP_FPS, 30)
@@ -161,6 +172,10 @@ class EyeTrackerApp:
                 black_indices.append(index)
                 cap.release()
                 continue
+            # Record the size actually delivered by the camera (some drivers
+            # clamp the requested value or ignore it entirely).
+            frame_h, frame_w = frame.shape[:2]
+            self.cfg.camera_width, self.cfg.camera_height = frame_w, frame_h
             self.cap = cap
             self.cfg.camera_index = index
             return
