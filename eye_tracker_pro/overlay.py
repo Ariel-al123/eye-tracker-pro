@@ -344,13 +344,22 @@ class OverlayWindow:
                 pass
         self._scrim_hwnd = None
 
+    def _top_level_hwnd(self) -> int:
+        """Tk's winfo_id() is a child HWND; mouse hit-testing uses its parent."""
+        hwnd = int(self._tk.winfo_id())
+        user32 = ctypes.windll.user32
+        user32.GetParent.argtypes = [ctypes.c_void_p]
+        user32.GetParent.restype = ctypes.c_void_p
+        parent = user32.GetParent(ctypes.c_void_p(hwnd))
+        return int(parent) if parent else hwnd
+
     def _raise_control_window(self) -> None:
         if self._created and self._tk is not None and __import__("sys").platform == "win32":
             try:
                 user32 = ctypes.windll.user32
                 user32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
                 user32.SetWindowPos.restype = ctypes.c_bool
-                user32.SetWindowPos(ctypes.c_void_p(self._tk.winfo_id()), ctypes.c_void_p(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+                user32.SetWindowPos(ctypes.c_void_p(self._top_level_hwnd()), ctypes.c_void_p(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
             except Exception:
                 pass
 
@@ -358,7 +367,6 @@ class OverlayWindow:
         if not self._created or self._tk is None or __import__("sys").platform != "win32":
             return
         try:
-            hwnd = self._tk.winfo_id()
             user32 = ctypes.windll.user32
             user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
             user32.GetWindowLongW.restype = ctypes.c_long
@@ -366,10 +374,14 @@ class OverlayWindow:
             user32.SetWindowLongW.restype = ctypes.c_long
             user32.SetWindowPos.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
             user32.SetWindowPos.restype = ctypes.c_bool
-            style = user32.GetWindowLongW(hwnd, -20)
+            # WS_EX_TRANSPARENT must be on the real top-level window. Setting it
+            # only on Tk's child window leaves the full-screen layer hit-testable,
+            # so synthetic clicks never reach the desktop underneath it.
+            hwnd = self._top_level_hwnd()
+            style = user32.GetWindowLongW(ctypes.c_void_p(hwnd), -20)
             click_through = 0x20
             style = style & ~click_through if self.mouse_debug or self.modal else style | click_through
-            user32.SetWindowLongW(hwnd, -20, style)
+            user32.SetWindowLongW(ctypes.c_void_p(hwnd), -20, style)
             user32.SetWindowPos(ctypes.c_void_p(hwnd), None, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
         except Exception:
             pass
@@ -417,8 +429,9 @@ class OverlayWindow:
         # Keep the game/desktop as the active window while the control layer stays topmost.
         if __import__("sys").platform == "win32":
             try:
-                hwnd = root.winfo_id()
                 user32 = ctypes.windll.user32
+                user32.GetParent.argtypes = [ctypes.c_void_p]
+                user32.GetParent.restype = ctypes.c_void_p
                 GWL_EXSTYLE, WS_EX_LAYERED, WS_EX_TRANSPARENT, WS_EX_NOACTIVATE = -20, 0x80000, 0x20, 0x08000000
                 user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
                 user32.GetWindowLongW.restype = ctypes.c_long
@@ -428,8 +441,11 @@ class OverlayWindow:
                 user32.SetWindowPos.restype = ctypes.c_bool
                 user32.SetLayeredWindowAttributes.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_ubyte, ctypes.c_uint]
                 user32.SetLayeredWindowAttributes.restype = ctypes.c_bool
-                style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-                user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
+                # winfo_id() is Tk's child window; hit-testing happens on the
+                # parent. Apply click-through to the parent, not the child.
+                hwnd = user32.GetParent(ctypes.c_void_p(root.winfo_id())) or root.winfo_id()
+                style = user32.GetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE)
+                user32.SetWindowLongW(ctypes.c_void_p(hwnd), GWL_EXSTYLE, style | WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE)
                 # COLORREF for TRANSPARENT (#010203), LWA_COLORKEY.
                 user32.SetLayeredWindowAttributes(ctypes.c_void_p(hwnd), 0x030201, 0, 0x1)
                 user32.SetWindowPos(ctypes.c_void_p(hwnd), ctypes.c_void_p(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)

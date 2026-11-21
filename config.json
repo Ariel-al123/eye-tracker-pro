@@ -1,8 +1,8 @@
 {
   "gaze_engine": "eyegestures",
   "camera_index": 0,
-  "camera_width": 640,
-  "camera_height": 480,
+  "camera_width": 1280,
+  "camera_height": 720,
   "camera_use_max_resolution": true,
   "show_preview": true,
   "mirror_preview": true,
