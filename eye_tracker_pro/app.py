@@ -10,6 +10,7 @@ import pyautogui
 
 from .config import AppConfig, load_config, save_config
 from .controller import CursorController
+from .cursor_overlay import CursorOverlay
 from .detector import FaceLandmarkerDetector, GazeFeatures
 from .filter import PointFilter
 from .mapper import GazeMapper
@@ -52,6 +53,7 @@ class EyeTrackerApp:
         self.eye_observation = None
         self.eye_gestures_point = None
         self.overlay = OverlayWindow(self.cfg.buttons) if self.cfg.overlay_enabled else None
+        self.cursor_overlay = CursorOverlay(self.screen_w, self.screen_h)
 
         self.cap: Optional[cv2.VideoCapture] = None
         self.running = False
@@ -329,12 +331,20 @@ class EyeTrackerApp:
         sx, sy = pred
         sx = max(0, min(self.screen_w - 1, sx))
         sy = max(0, min(self.screen_h - 1, sy))
-        fx, fy = self.filter.filter(sx, sy, now)
+        if self.eye_gestures:
+            # EyeGestures' calibration preview shows its direct point. Keep
+            # that same point and speed in desktop use; an extra One Euro
+            # filter and saved offsets made the real cursor lag and drift.
+            fx, fy = float(sx), float(sy)
+        else:
+            fx, fy = self.filter.filter(sx, sy, now)
 
-        # Fine adjustment: gain around center + offset
-        cx, cy = self.screen_w / 2.0, self.screen_h / 2.0
-        fx = cx + (fx - cx) * float(self.cfg.fine_gain_x) + float(self.cfg.fine_offset_x)
-        fy = cy + (fy - cy) * float(self.cfg.fine_gain_y) + float(self.cfg.fine_offset_y)
+        # Fine adjustment remains available when explicitly enabled with F.
+        # For other engines, preserve the configured mapping at all times.
+        if not self.eye_gestures or self.fine_tune_mode:
+            cx, cy = self.screen_w / 2.0, self.screen_h / 2.0
+            fx = cx + (fx - cx) * float(self.cfg.fine_gain_x) + float(self.cfg.fine_offset_x)
+            fy = cy + (fy - cy) * float(self.cfg.fine_gain_y) + float(self.cfg.fine_offset_y)
 
         ix, iy = self.controller.clamp(fx, fy)
 
@@ -522,6 +532,17 @@ class EyeTrackerApp:
                     self.overlay.state.dwell_progress = dwell
                     self.overlay.render()
 
+                self.cursor_overlay.update(
+                    gaze,
+                    visible=bool(
+                        gaze
+                        and self.cfg.move_cursor_enabled
+                        and not self.controller.paused
+                        and not self.calibrating
+                    ),
+                    dwell_progress=dwell,
+                )
+
                 preview = self._draw_preview(frame, feats, gaze, dwell)
                 cv2.imshow("EyeTrackerPro - Preview", preview)
 
@@ -607,5 +628,6 @@ class EyeTrackerApp:
                 pass
         if self.overlay:
             self.overlay.destroy()
+        self.cursor_overlay.destroy()
         cv2.destroyAllWindows()
         save_config(self.base_dir, self.cfg)
