@@ -447,7 +447,11 @@ class EyeTrackerApp:
                     )
                     if self.calibrating:
                         if self.eye_gestures.completed_points >= self.eye_gestures.total_points:
-                            self.status = f"Test completo: {self.eye_gestures.total_points}/{self.eye_gestures.total_points}. Presiona C para continuar."
+                            self.eye_gestures.finish_calibration()
+                            self.calibrating = False
+                            self.filter.reset()
+                            self.controller.set_paused(False)
+                            self.status = "Calibracion completa. Cursor activo."
                         else:
                             self.status = (
                                 f"EyeGestures: {self.eye_gestures.completed_points + 1}/"
@@ -468,13 +472,10 @@ class EyeTrackerApp:
                     if self.eye_gestures_point and feats.face_detected:
                         cv2.circle(calib_view, self.eye_gestures_point, 18, (255, 120, 0), -1, cv2.LINE_AA)
                         cv2.circle(calib_view, self.eye_gestures_point, 24, (255, 255, 255), 2, cv2.LINE_AA)
-                    if self.eye_gestures.completed_points >= self.eye_gestures.total_points:
-                        progress_text = f"Test completo: {self.eye_gestures.total_points}/{self.eye_gestures.total_points} puntos. Presiona C para continuar; ESC cancela."
-                    else:
-                        progress_text = (
-                            f"Calibracion: {self.eye_gestures.completed_points + 1}/"
-                                f"{self.eye_gestures.total_points} - mira el punto; espera 1 s entre puntos"
-                        )
+                    progress_text = (
+                        f"Calibracion: {self.eye_gestures.completed_points + 1}/"
+                        f"{self.eye_gestures.total_points} - mira el punto; espera 1 s entre puntos"
+                    )
                     cv2.putText(calib_view, progress_text, (50, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (240, 240, 240), 2, cv2.LINE_AA)
                     cv2.putText(calib_view, "Punto azul: posicion estimada de la mirada", (50, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 160, 40), 2, cv2.LINE_AA)
                     if not feats.face_detected:
