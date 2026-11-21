@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import time
+import ctypes
+import sys
 from dataclasses import dataclass
 
 import pyautogui
@@ -28,15 +30,169 @@ class CursorController:
         self.last_move_at = 0.0
         self.move_deadzone_px = max(0, int(move_deadzone_px))
         self._last_sent: tuple[int, int] | None = None
+        self.held_keys: set[str] = set()
+        self.held_shortcuts: set[frozenset[str]] = set()
+        self.held_mouse_buttons: set[str] = set()
+        self.game_held_keys: set[str] = set()
 
     def set_paused(self, paused: bool) -> None:
         self.paused = paused
-        if paused and self.dragging:
+        if paused:
+            self.release_all()
+
+    def release_all(self) -> None:
+        for key in tuple(self.held_keys | self.game_held_keys):
+            try:
+                pyautogui.keyUp(key)
+            except Exception:
+                pass
+        for button in tuple(self.held_mouse_buttons):
+            try:
+                pyautogui.mouseUp(button=button)
+            except Exception:
+                pass
+        if self.dragging:
             try:
                 pyautogui.mouseUp()
             except Exception:
                 pass
-            self.dragging = False
+        self.held_keys.clear()
+        self.held_shortcuts.clear()
+        self.game_held_keys.clear()
+        self.held_mouse_buttons.clear()
+        self.dragging = False
+
+    def set_game_hold(self, keys: set[str]) -> None:
+        """Keep game movement keys down only while gaze is in their zones."""
+        wanted = set() if self.paused else keys
+        for key in self.game_held_keys - wanted:
+            try:
+                pyautogui.keyUp(key)
+            except Exception:
+                pass
+        for key in wanted - self.game_held_keys:
+            try:
+                pyautogui.keyDown(key)
+            except Exception:
+                pass
+        self.game_held_keys = wanted
+
+    def move_game_camera(self, direction: str, speed: int = 4) -> None:
+        if self.paused:
+            return
+        movement = {
+            "up_left": (-speed, -speed), "up_right": (speed, -speed),
+            "down_left": (-speed, speed), "down_right": (speed, speed),
+        }
+        delta = movement.get(direction)
+        if delta:
+            try:
+                pyautogui.moveRel(*delta, duration=0)
+            except Exception:
+                pass
+
+    def shortcut(self, keys: list[str], hold: bool = False) -> str:
+        if self.paused:
+            return "ignored_paused"
+        normalized = [str(key).lower() for key in keys if key]
+        if not normalized:
+            return "empty_shortcut"
+        if hold:
+            requested = frozenset(normalized)
+            if requested in self.held_shortcuts:
+                self.held_shortcuts.remove(requested)
+                still_needed = set().union(*self.held_shortcuts) if self.held_shortcuts else set()
+                for key in set(requested) - still_needed:
+                    try:
+                        pyautogui.keyUp(key)
+                    except Exception:
+                        pass
+                    self.held_keys.discard(key)
+                return "released"
+            pressed_now: list[str] = []
+            try:
+                for key in normalized:
+                    if key not in self.held_keys:
+                        pyautogui.keyDown(key)
+                        self.held_keys.add(key)
+                        pressed_now.append(key)
+            except Exception:
+                for key in reversed(pressed_now):
+                    try:
+                        pyautogui.keyUp(key)
+                    except Exception:
+                        pass
+                    self.held_keys.discard(key)
+                raise
+            self.held_shortcuts.add(requested)
+            return "held"
+        pyautogui.hotkey(*normalized)
+        return "shortcut"
+
+    def type_key(self, key: str) -> str:
+        if self.paused:
+            return "ignored_paused"
+        try:
+            pyautogui.press(key)
+            return "key"
+        except Exception as exc:
+            return f"error:{exc}"
+
+    def type_text(self, text: str) -> str:
+        if self.paused:
+            return "ignored_paused"
+        if sys.platform != "win32":
+            pyautogui.write(text, interval=0.01)
+            return "text"
+        class KeyboardInput(ctypes.Structure):
+            _fields_ = [
+                ("virtual_key", ctypes.c_ushort),
+                ("scan_code", ctypes.c_ushort),
+                ("flags", ctypes.c_uint),
+                ("time", ctypes.c_uint),
+                ("extra_info", ctypes.c_size_t),
+            ]
+
+        class InputUnion(ctypes.Union):
+            _fields_ = [("keyboard", KeyboardInput)]
+
+        class Input(ctypes.Structure):
+            _anonymous_ = ("value",)
+            _fields_ = [("type", ctypes.c_uint), ("value", InputUnion)]
+
+        events = []
+        for unit in (int.from_bytes(text.encode("utf-16-le")[i:i + 2], "little") for i in range(0, len(text.encode("utf-16-le")), 2)):
+            events.append(Input(type=1, value=InputUnion(keyboard=KeyboardInput(0, unit, 0x0004, 0, 0))))
+            events.append(Input(type=1, value=InputUnion(keyboard=KeyboardInput(0, unit, 0x0004 | 0x0002, 0, 0))))
+        if not events:
+            return "text"
+        batch = (Input * len(events))(*events)
+        user32 = ctypes.windll.user32
+        user32.SendInput.argtypes = [ctypes.c_uint, ctypes.POINTER(Input), ctypes.c_int]
+        user32.SendInput.restype = ctypes.c_uint
+        sent = user32.SendInput(len(events), batch, ctypes.sizeof(Input))
+        if sent != len(events):
+            return f"error: Unicode input sent {sent}/{len(events)} events"
+        return "text"
+
+    def hold_mouse(self, button: str = "left") -> str:
+        if self.paused:
+            return "ignored_paused"
+        if button in self.held_mouse_buttons:
+            pyautogui.mouseUp(button=button)
+            self.held_mouse_buttons.remove(button)
+            return "released"
+        pyautogui.mouseDown(button=button)
+        self.held_mouse_buttons.add(button)
+        return "held"
+
+    def click_mouse(self, button: str = "left") -> str:
+        if self.paused:
+            return "ignored_paused"
+        if button not in {"left", "right", "middle"}:
+            return "invalid_mouse_button"
+        pyautogui.click(button=button)
+        return "click"
 
     def toggle_pause(self) -> bool:
         self.set_paused(not self.paused)
@@ -84,6 +240,8 @@ class CursorController:
                 else:
                     pyautogui.mouseDown()
                     self.dragging = True
+            elif action == "hold_mouse":
+                return self.hold_mouse()
             elif action == "calibrate":
                 return "calibrate"
             else:

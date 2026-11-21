@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
@@ -43,6 +45,58 @@ class GazeMapper:
 
     def add_sample(self, feature: np.ndarray, screen_x: float, screen_y: float) -> None:
         self.samples.append(CalibrationSample(feature=feature.astype(np.float32), screen_x=float(screen_x), screen_y=float(screen_y)))
+
+    def save(self, path: Path, screen_w: int, screen_h: int) -> bool:
+        """Persist calibration samples in normalized screen coordinates."""
+        if not self.calibrated or not self.samples or screen_w <= 0 or screen_h <= 0:
+            return False
+        payload = {
+            "format": 1,
+            "screen_width": int(screen_w),
+            "screen_height": int(screen_h),
+            "samples": [
+                {
+                    "feature": sample.feature.astype(float).tolist(),
+                    "x": sample.screen_x / screen_w,
+                    "y": sample.screen_y / screen_h,
+                }
+                for sample in self.samples
+            ],
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_suffix(path.suffix + ".tmp")
+            temporary.write_text(json.dumps(payload), encoding="utf-8")
+            temporary.replace(path)
+            return True
+        except (OSError, ValueError, TypeError):
+            return False
+
+    def load(self, path: Path, screen_w: int, screen_h: int) -> bool:
+        """Load and refit a saved calibration, adapting it to the current display."""
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if payload.get("format") != 1:
+                raise ValueError("Unsupported calibration format")
+            samples = payload.get("samples", [])
+            if len(samples) < 5:
+                raise ValueError("Calibration has too few samples")
+            loaded: list[CalibrationSample] = []
+            for sample in samples:
+                feature = np.asarray(sample["feature"], dtype=np.float32).reshape(-1)
+                x, y = float(sample["x"]), float(sample["y"])
+                if feature.size < 11 or not np.all(np.isfinite(feature)) or not np.isfinite(x + y):
+                    raise ValueError("Invalid calibration sample")
+                if not (0.0 <= x <= 1.0 and 0.0 <= y <= 1.0):
+                    raise ValueError("Calibration coordinates are out of bounds")
+                loaded.append(CalibrationSample(feature, x * (screen_w - 1), y * (screen_h - 1)))
+            self.samples = loaded
+            if self.fit():
+                return True
+        except (OSError, json.JSONDecodeError, KeyError, TypeError, ValueError, np.linalg.LinAlgError):
+            pass
+        self.clear()
+        return False
 
     def fit(self, ridge: float = 1e-2) -> bool:
         if len(self.samples) < 5:

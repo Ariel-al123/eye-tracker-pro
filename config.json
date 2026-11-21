@@ -1,4 +1,5 @@
 {
+  "gaze_engine": "eyegestures",
   "camera_index": 0,
   "camera_width": 1280,
   "camera_height": 720,
@@ -7,6 +8,8 @@
   "calibration_points": 9,
   "calibration_samples_per_point": 40,
   "calibration_sample_delay_ms": 40,
+  "calibration_stability_frames": 8,
+  "calibration_stability_threshold": 0.045,
   "calibration_point_radius": 22,
   "filter_min_cutoff": 1.0,
   "filter_beta": 0.025,
@@ -28,6 +31,75 @@
   "overlay_enabled": true,
   "overlay_alpha": 0.92,
   "show_gaze_dot": true,
+  "overlay_mode": "navigation",
+  "language": "es",
+  "suggestion_history": {},
+  "debug_mouse_interaction": false,
+  "keybind_pages": [
+    [
+      {
+        "label": "Keybind 1",
+        "keys": [
+          "ctrl",
+          "c"
+        ],
+        "hold": false
+      },
+      {
+        "label": "Keybind 2",
+        "keys": [
+          "ctrl",
+          "v"
+        ],
+        "hold": false
+      },
+      {
+        "label": "Keybind 3",
+        "keys": [
+          "alt",
+          "tab"
+        ],
+        "hold": false
+      },
+      {
+        "label": "Keybind 4",
+        "keys": [
+          "shift"
+        ],
+        "hold": true
+      }
+    ],
+    [
+      {
+        "label": "Keybind 5",
+        "keys": [
+          "left"
+        ],
+        "hold": true
+      },
+      {
+        "label": "Keybind 6",
+        "keys": [
+          "right"
+        ],
+        "hold": true
+      },
+      {
+        "label": "Keybind 7",
+        "keys": [
+          "up"
+        ],
+        "hold": true
+      },
+      {
+        "label": "Keybind 8",
+        "keys": [
+          "down"
+        ],
+        "hold": true
+      }
+    ]
+  ],
   "buttons": [
     {
       "id": "btn_left",

@@ -20,6 +20,7 @@ class ButtonConfig:
 
 @dataclass
 class AppConfig:
+    gaze_engine: str = "eyegestures"
     camera_index: int = 0
     camera_width: int = 1280
     camera_height: int = 720
@@ -27,9 +28,11 @@ class AppConfig:
     mirror_preview: bool = True
 
     # Calibration
-    calibration_points: int = 9  # 5 or 9
+    calibration_points: int = 9  # 5, 9, or 25
     calibration_samples_per_point: int = 40
     calibration_sample_delay_ms: int = 40
+    calibration_stability_frames: int = 8
+    calibration_stability_threshold: float = 0.045
     calibration_point_radius: int = 22
 
     # Smoothing / filter
@@ -61,6 +64,24 @@ class AppConfig:
     overlay_enabled: bool = True
     overlay_alpha: float = 0.92
     show_gaze_dot: bool = True
+    overlay_mode: str = "navigation"
+    language: str = "en"
+    suggestion_history: dict = field(default_factory=dict)
+    debug_mouse_interaction: bool = False
+    keybind_pages: List[List[dict]] = field(default_factory=lambda: [
+        [
+            {"label": "Keybind 1", "keys": ["ctrl", "c"], "kind": "click"},
+            {"label": "Keybind 2", "keys": ["ctrl", "v"], "kind": "click"},
+            {"label": "Keybind 3", "keys": ["alt", "tab"], "kind": "click"},
+            {"label": "Keybind 4", "keys": ["shift"], "kind": "toggle"},
+        ],
+        [
+            {"label": "Keybind 5", "keys": ["left"], "kind": "toggle"},
+            {"label": "Keybind 6", "keys": ["right"], "kind": "toggle"},
+            {"label": "Keybind 7", "keys": ["up"], "kind": "toggle"},
+            {"label": "Keybind 8", "keys": ["down"], "kind": "toggle"},
+        ],
+    ])
 
     buttons: List[ButtonConfig] = field(default_factory=lambda: [
         ButtonConfig("btn_left", "Clic izq", "left_click", 20, 20),
@@ -74,6 +95,14 @@ class AppConfig:
 
 
 DEFAULT_CONFIG_NAME = "config.json"
+
+
+def shortcut_kind(entry: dict) -> str:
+    """Read the current binding type, migrating the older hold boolean in memory."""
+    kind = entry.get("kind")
+    if kind in {"click", "toggle"}:
+        return kind
+    return "toggle" if bool(entry.get("hold", False)) else "click"
 
 
 def get_config_path(base_dir: Path) -> Path:
