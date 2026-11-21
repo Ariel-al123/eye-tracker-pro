@@ -5,7 +5,7 @@
   "camera_height": 480,
   "show_preview": true,
   "mirror_preview": true,
-  "calibration_points": 9,
+  "calibration_points": 25,
   "calibration_samples_per_point": 40,
   "eyetheia_samples_per_target": 12,
   "calibration_sample_delay_ms": 40,

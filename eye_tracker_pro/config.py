@@ -28,7 +28,7 @@ class AppConfig:
     mirror_preview: bool = True
 
     # Calibration
-    calibration_points: int = 9  # 5 or 9
+    calibration_points: int = 25  # 5, 9, or a full-screen 5x5 grid
     calibration_samples_per_point: int = 40
     eyetheia_samples_per_target: int = 12
     calibration_sample_delay_ms: int = 40

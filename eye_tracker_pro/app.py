@@ -24,6 +24,7 @@ CALIB_9 = [
     (0.04, 0.5),  (0.5, 0.5),  (0.96, 0.5),
     (0.04, 0.96), (0.5, 0.96), (0.96, 0.96),
 ]
+CALIB_25 = [(x / 4, y / 4) for y in range(5) for x in range(5)]
 
 
 class EyeTrackerApp:
@@ -65,6 +66,7 @@ class EyeTrackerApp:
         self.paused_by_face_loss = False
         self.fine_tune_mode = False
         self.status = "Presiona C para calibrar"
+        self.calibration_window_created = False
 
     def _open_camera(self) -> None:
         configured = max(0, int(self.cfg.camera_index))
@@ -121,9 +123,23 @@ class EyeTrackerApp:
         )
 
     def _calibration_targets(self) -> list[tuple[int, int]]:
-        pts = CALIB_9 if self.cfg.calibration_points >= 9 else CALIB_5
+        if self.cfg.calibration_points >= 25:
+            pts = CALIB_25
+        else:
+            pts = CALIB_9 if self.cfg.calibration_points >= 9 else CALIB_5
         self.calib_points = pts
-        return [(int(x * self.screen_w), int(y * self.screen_h)) for x, y in pts]
+        return [
+            (int(round(x * (self.screen_w - 1))), int(round(y * (self.screen_h - 1))))
+            for x, y in pts
+        ]
+
+    def _show_calibration(self, frame: np.ndarray) -> None:
+        name = "EyeTrackerPro - Calibracion"
+        if not self.calibration_window_created:
+            cv2.namedWindow(name, cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty(name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            self.calibration_window_created = True
+        cv2.imshow(name, frame)
 
     def start_calibration(self) -> None:
         if self.eye_gestures:
@@ -182,7 +198,10 @@ class EyeTrackerApp:
     def _draw_calibration(self, frame: np.ndarray, feats: GazeFeatures) -> np.ndarray:
         canvas = np.zeros((self.screen_h, self.screen_w, 3), dtype=np.uint8)
         canvas[:] = (18, 18, 18)
-        targets = [(int(x * self.screen_w), int(y * self.screen_h)) for x, y in self.calib_points]
+        targets = [
+            (int(round(x * (self.screen_w - 1))), int(round(y * (self.screen_h - 1))))
+            for x, y in self.calib_points
+        ]
         tx, ty = targets[self.calib_index]
 
         # draw all targets
@@ -480,17 +499,14 @@ class EyeTrackerApp:
                     cv2.putText(calib_view, "Punto azul: posicion estimada de la mirada", (50, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (255, 160, 40), 2, cv2.LINE_AA)
                     if not feats.face_detected:
                         cv2.putText(calib_view, "SIN ROSTRO: revisa la imagen y el indice de la camara", (50, 145), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 100, 255), 2, cv2.LINE_AA)
-                    cv2.namedWindow("EyeTrackerPro - Calibracion", cv2.WND_PROP_FULLSCREEN)
-                    cv2.setWindowProperty("EyeTrackerPro - Calibracion", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-                    cv2.imshow("EyeTrackerPro - Calibracion", calib_view)
+                    self._show_calibration(calib_view)
                 elif self.calibrating:
                     calib_view = self._draw_calibration(frame, feats)
-                    cv2.namedWindow("EyeTrackerPro - Calibracion", cv2.WND_PROP_FULLSCREEN)
-                    cv2.setWindowProperty("EyeTrackerPro - Calibracion", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-                    cv2.imshow("EyeTrackerPro - Calibracion", calib_view)
+                    self._show_calibration(calib_view)
                 else:
                     try:
                         cv2.destroyWindow("EyeTrackerPro - Calibracion")
+                        self.calibration_window_created = False
                     except Exception:
                         pass
 

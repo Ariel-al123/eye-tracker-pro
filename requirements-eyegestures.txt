@@ -1,2 +1,5 @@
 # EyeGestures 4.x requires Python >=3.12/3.13. Pin the Python 3.11-compatible 3.x API.
 eyeGestures==3.2.4
+mediapipe==0.10.21
+scipy>=1.11
+scikit-learn>=1.4

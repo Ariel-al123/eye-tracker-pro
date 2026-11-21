@@ -75,15 +75,12 @@ class EyeGesturesEngine:
 
         finder.find = find_face
         tracker.finder = finder
-        calibration_map = np.array([
-            (0.04, 0.04), (0.12, 0.05), (0.05, 0.12), (0.12, 0.12),
-            (0.96, 0.04), (0.88, 0.05), (0.95, 0.12), (0.88, 0.12),
-            (0.04, 0.96), (0.12, 0.95), (0.05, 0.88), (0.12, 0.88),
-            (0.96, 0.96), (0.88, 0.95), (0.95, 0.88), (0.88, 0.88),
-            (0.35, 0.04), (0.65, 0.04), (0.35, 0.96), (0.65, 0.96),
-            (0.04, 0.35), (0.04, 0.65), (0.96, 0.35), (0.96, 0.65),
-            (0.50, 0.50),
-        ], dtype=np.float32)
+        # 5 x 5 grid spans the entire screen. Values 0 and 1 intentionally
+        # place the outer targets at the first/last pixel, including corners.
+        calibration_map = np.array(
+            [(x / 4, y / 4) for y in range(5) for x in range(5)],
+            dtype=np.float32,
+        )
         tracker.uploadCalibrationMap(calibration_map, context="eye-tracker-pro")
         return tracker
 
