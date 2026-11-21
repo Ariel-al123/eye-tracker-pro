@@ -1,4 +1,5 @@
 {
+  "gaze_engine": "eyetheia",
   "camera_index": 0,
   "camera_width": 1280,
   "camera_height": 720,
@@ -6,6 +7,7 @@
   "mirror_preview": true,
   "calibration_points": 9,
   "calibration_samples_per_point": 40,
+  "eyetheia_samples_per_target": 6,
   "calibration_sample_delay_ms": 40,
   "calibration_point_radius": 22,
   "filter_min_cutoff": 1.0,

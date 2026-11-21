@@ -14,6 +14,7 @@ from .detector import FaceLandmarkerDetector, GazeFeatures
 from .filter import PointFilter
 from .mapper import GazeMapper
 from .overlay import OverlayWindow
+from .eyetheia_engine import EyeTheiaEngine
 
 
 CALIB_5 = [(0.05, 0.05), (0.95, 0.05), (0.5, 0.5), (0.05, 0.95), (0.95, 0.95)]
@@ -34,7 +35,13 @@ class EyeTrackerApp:
         self.filter = PointFilter(self.cfg.filter_min_cutoff, self.cfg.filter_beta, self.cfg.filter_d_cutoff)
 
         model_path = base_dir / "models" / "face_landmarker.task"
-        self.detector = FaceLandmarkerDetector(model_path)
+        if self.cfg.gaze_engine.lower() == "eyetheia":
+            self.eye_theia = EyeTheiaEngine(base_dir, self.screen_w, self.screen_h)
+            self.detector = None
+        else:
+            self.eye_theia = None
+            self.detector = FaceLandmarkerDetector(model_path)
+        self.eye_observation = None
         self.overlay = OverlayWindow(self.cfg.buttons) if self.cfg.overlay_enabled else None
 
         self.cap: Optional[cv2.VideoCapture] = None
@@ -64,6 +71,9 @@ class EyeTrackerApp:
         return [(int(x * self.screen_w), int(y * self.screen_h)) for x, y in pts]
 
     def start_calibration(self) -> None:
+        if self.eye_theia and self.eye_theia.training:
+            self.status = "Espera a que termine la personalización de EyeTheia."
+            return
         self._calibration_targets()
         self.calibrating = True
         self.calib_index = 0
@@ -71,10 +81,23 @@ class EyeTrackerApp:
         self.calib_point_started_at = time.perf_counter()
         self.mapper.clear()
         self.filter.reset()
+        if self.eye_theia:
+            self.eye_theia.begin_calibration()
         self.status = "Calibrando: mira el punto rojo"
         self.controller.set_paused(True)
 
     def _finish_calibration(self) -> None:
+        if self.eye_theia:
+            self.calibrating = False
+            self.calib_samples = []
+            self.filter.reset()
+            try:
+                self.eye_theia.train_async()
+                self.status = "Personalizando EyeTheia con tu calibración..."
+            except Exception as exc:
+                self.status = f"Falló la personalización: {exc}"
+                self.controller.set_paused(True)
+            return
         ok = self.mapper.fit()
         self.calibrating = False
         self.calib_samples = []
@@ -112,9 +135,13 @@ class EyeTrackerApp:
             return canvas
 
         eyes_open = feats.left_eye_open > 0.08 and feats.right_eye_open > 0.08
+        required_samples = (self.cfg.eyetheia_samples_per_target if self.eye_theia
+                            else self.cfg.calibration_samples_per_point)
         if feats.face_detected and eyes_open:
             self.calib_samples.append(feats.feature.copy())
-            progress = len(self.calib_samples) / max(1, self.cfg.calibration_samples_per_point)
+            if self.eye_theia:
+                self.eye_theia.add_calibration_sample(self.eye_observation, tx, ty)
+            progress = len(self.calib_samples) / max(1, required_samples)
             bar_w = 500
             cv2.rectangle(canvas, (60, 170), (60 + bar_w, 195), (80, 80, 80), -1)
             cv2.rectangle(canvas, (60, 170), (60 + int(bar_w * progress), 195), (0, 200, 0), -1)
@@ -122,10 +149,11 @@ class EyeTrackerApp:
         else:
             cv2.putText(canvas, "Rostro no detectado", (60, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 100, 255), 2, cv2.LINE_AA)
 
-        if len(self.calib_samples) >= self.cfg.calibration_samples_per_point:
+        if len(self.calib_samples) >= required_samples:
             # Use median sample to reduce outliers
             med = np.median(np.stack(self.calib_samples, axis=0), axis=0)
-            self.mapper.add_sample(med, tx, ty)
+            if not self.eye_theia:
+                self.mapper.add_sample(med, tx, ty)
             self.calib_index += 1
             self.calib_samples = []
             self.calib_point_started_at = time.perf_counter()
@@ -161,7 +189,13 @@ class EyeTrackerApp:
         if feats.left_eye_open <= 0.08 or feats.right_eye_open <= 0.08:
             self.controller.dwell.active = False
             return None, 0.0
-        pred = self.mapper.predict(feats.feature)
+        if self.eye_theia:
+            if self.eye_theia.training:
+                self.status = "Personalizando EyeTheia..."
+                return None, 0.0
+            pred = self.eye_theia.predict(self.eye_observation) if self.eye_observation else None
+        else:
+            pred = self.mapper.predict(feats.feature)
         if pred is None:
             self.status = "Sin calibración. Presiona C."
             return None, 0.0
@@ -206,9 +240,28 @@ class EyeTrackerApp:
         if action_target:
             self._handle_action(action_target)
 
-        if not self.controller.paused and self.mapper.calibrated:
+        if not self.controller.paused and self._gaze_ready():
             self.status = "Mirada activa"
         return (ix, iy), dwell_progress
+
+    def _gaze_ready(self) -> bool:
+        if self.eye_theia:
+            return self.eye_theia.ready
+        return self.mapper.calibrated
+
+    def _finish_eye_theia_training_if_ready(self) -> None:
+        if not self.eye_theia or not self.eye_theia.training_done:
+            return
+        self.eye_theia.training_done = False
+        if self.eye_theia.training_error is not None:
+            self.eye_theia.ready = False
+            self.status = f"Falló EyeTheia: {self.eye_theia.training_error}"
+            self.controller.set_paused(True)
+            return
+        self.filter.reset()
+        self.eye_theia.ready = True
+        self.controller.set_paused(False)
+        self.status = "EyeTheia listo. Mirada activa."
 
     def _draw_preview(self, frame: np.ndarray, feats: GazeFeatures, gaze: Optional[tuple[int, int]], dwell: float) -> np.ndarray:
         view = frame.copy()
@@ -217,7 +270,7 @@ class EyeTrackerApp:
         h, w = view.shape[:2]
         color = (0, 200, 0) if feats.face_detected else (0, 0, 255)
         cv2.putText(view, f"Face: {'OK' if feats.face_detected else 'NO'}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
-        cv2.putText(view, f"Calibrado: {'SI' if self.mapper.calibrated else 'NO'}", (20, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.putText(view, f"Calibrado: {'SI' if self._gaze_ready() else 'NO'}", (20, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(view, f"Mouse: {'OFF' if self.controller.paused else 'ON'}", (20, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if not self.controller.paused else (0, 165, 255), 2, cv2.LINE_AA)
         if gaze:
             cv2.putText(view, f"Gaze: {gaze[0]},{gaze[1]} dwell {int(dwell*100)}%", (20, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 2, cv2.LINE_AA)
@@ -244,7 +297,18 @@ class EyeTrackerApp:
                     break
 
                 ts = int(time.perf_counter() * 1000)
-                feats = self.detector.detect(frame, ts)
+                if self.eye_theia:
+                    self.eye_observation = None if self.eye_theia.training else self.eye_theia.observe(frame)
+                    observation = self.eye_observation
+                    feats = GazeFeatures(
+                        feature=np.zeros(1, dtype=np.float32),
+                        face_detected=observation is not None,
+                        left_eye_open=observation.left_eye_open if observation else 0.0,
+                        right_eye_open=observation.right_eye_open if observation else 0.0,
+                    )
+                    self._finish_eye_theia_training_if_ready()
+                else:
+                    feats = self.detector.detect(frame, ts)
 
                 if self.calibrating:
                     calib_view = self._draw_calibration(frame, feats)
@@ -334,10 +398,16 @@ class EyeTrackerApp:
                 self.cap.release()
         except Exception:
             pass
-        try:
-            self.detector.close()
-        except Exception:
-            pass
+        if self.detector:
+            try:
+                self.detector.close()
+            except Exception:
+                pass
+        if self.eye_theia:
+            try:
+                self.eye_theia.close()
+            except Exception:
+                pass
         if self.overlay:
             self.overlay.destroy()
         cv2.destroyAllWindows()

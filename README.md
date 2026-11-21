@@ -1,5 +1,7 @@
 # Eye Tracker Pro
 
+> **Branch `feature-eyetheia-gaze`:** esta version usa el modelo profundo iTracker de EyeTheia y ajuste personalizado con los nueve puntos. Antes de ejecutar, instala `requirements-eyetheia.txt` y sigue la guia [EYETHEIA.md](EYETHEIA.md). El motor anterior sigue disponible con `gaze_engine: "mediapipe"` en `config.json`.
+
 Prototipo robusto de control por mirada para navegación básica de computadora, pensado para personas con movilidad limitada en manos/brazos. Usa webcam, MediaPipe Face Landmarker, calibración por puntos, suavizado One Euro Filter, dwell click y una barra de botones configurables.
 
 > **Nota honesta**: esto no reemplaza un producto comercial pulido como Beam Eye Tracker. Es una base mucho más limpia y robusta que los prototipos anteriores, diseñada para iterar rápido.
@@ -47,6 +49,8 @@ Instalar dependencias:
 ```bash
 pip install -r requirements.txt
 ```
+
+En la rama `feature-eyetheia-gaze`, instala además las dependencias del motor profundo con `pip install -r requirements-eyetheia.txt`. Consulta [EYETHEIA.md](EYETHEIA.md) para configuración, calibración y licencia.
 
 ## Ejecutar
 

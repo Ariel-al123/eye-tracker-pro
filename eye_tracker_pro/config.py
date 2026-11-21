@@ -20,6 +20,7 @@ class ButtonConfig:
 
 @dataclass
 class AppConfig:
+    gaze_engine: str = "eyetheia"
     camera_index: int = 0
     camera_width: int = 1280
     camera_height: int = 720
@@ -29,6 +30,7 @@ class AppConfig:
     # Calibration
     calibration_points: int = 9  # 5 or 9
     calibration_samples_per_point: int = 40
+    eyetheia_samples_per_target: int = 6
     calibration_sample_delay_ms: int = 40
     calibration_point_radius: int = 22
 
