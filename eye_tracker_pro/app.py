@@ -51,7 +51,10 @@ class EyeTrackerApp:
         self.calib_index = 0
         self.calib_samples: list[np.ndarray] = []
         self.calib_point_started_at = 0.0
+        self.last_calibration_sample_at = 0.0
+        self.calib_gaze_history: list[tuple[float, float]] = []
         self.last_face_seen_at = 0.0
+        self.paused_by_face_loss = False
         self.fine_tune_mode = False
         self.status = "Presiona C para calibrar"
 
@@ -59,9 +62,15 @@ class EyeTrackerApp:
         self.cap = cv2.VideoCapture(self.cfg.camera_index, cv2.CAP_DSHOW)
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.camera_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.camera_height)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not self.cap.isOpened():
             # fallback without DSHOW
             self.cap = cv2.VideoCapture(self.cfg.camera_index)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cfg.camera_width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cfg.camera_height)
+            self.cap.set(cv2.CAP_PROP_FPS, 30)
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not self.cap.isOpened():
             raise RuntimeError("No se pudo abrir la cámara. Verifica permisos/conexión.")
 
@@ -78,7 +87,9 @@ class EyeTrackerApp:
         self.calibrating = True
         self.calib_index = 0
         self.calib_samples = []
+        self.calib_gaze_history = []
         self.calib_point_started_at = time.perf_counter()
+        self.last_calibration_sample_at = 0.0
         self.mapper.clear()
         self.filter.reset()
         if self.eye_theia:
@@ -137,17 +148,41 @@ class EyeTrackerApp:
         eyes_open = feats.left_eye_open > 0.08 and feats.right_eye_open > 0.08
         required_samples = (self.cfg.eyetheia_samples_per_target if self.eye_theia
                             else self.cfg.calibration_samples_per_point)
+        stable = True
         if feats.face_detected and eyes_open:
-            self.calib_samples.append(feats.feature.copy())
-            if self.eye_theia:
-                self.eye_theia.add_calibration_sample(self.eye_observation, tx, ty)
+            now = time.perf_counter()
+            interval = max(0, self.cfg.calibration_sample_delay_ms) / 1000.0
+            sample_due = now - self.last_calibration_sample_at >= interval
+            if self.eye_theia and self.eye_observation:
+                raw_gaze = self.eye_theia.predict(self.eye_observation)
+                if raw_gaze:
+                    self.calib_gaze_history.append((raw_gaze[0] / self.screen_w, raw_gaze[1] / self.screen_h))
+                    self.calib_gaze_history = self.calib_gaze_history[-8:]
+                    stable = len(self.calib_gaze_history) >= 5 and bool(
+                        np.max(np.std(np.asarray(self.calib_gaze_history), axis=0)) <= 0.055
+                    )
+                else:
+                    stable = False
+            if sample_due and stable:
+                self.last_calibration_sample_at = now
+                self.calib_samples.append(feats.feature.copy())
+                if self.eye_theia:
+                    self.eye_theia.add_calibration_sample(self.eye_observation, tx, ty)
             progress = len(self.calib_samples) / max(1, required_samples)
             bar_w = 500
             cv2.rectangle(canvas, (60, 170), (60 + bar_w, 195), (80, 80, 80), -1)
             cv2.rectangle(canvas, (60, 170), (60 + int(bar_w * progress), 195), (0, 200, 0), -1)
             cv2.putText(canvas, f"{int(progress*100)}%", (570, 192), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 2, cv2.LINE_AA)
         else:
-            cv2.putText(canvas, "Rostro no detectado", (60, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 100, 255), 2, cv2.LINE_AA)
+            self.calib_gaze_history = []
+            if not feats.face_detected:
+                dim = bool(self.eye_theia and self.eye_theia.last_brightness < 82)
+                hint = "Aumenta la luz frente a tu cara" if dim else "Centra tu cara y alejate un poco de la camara"
+                cv2.putText(canvas, "Rostro no detectado - " + hint, (60, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 100, 255), 2, cv2.LINE_AA)
+            elif not eyes_open:
+                cv2.putText(canvas, "Abre los dos ojos y mira al centro del punto", (60, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 150, 255), 2, cv2.LINE_AA)
+            elif self.eye_theia and not stable:
+                cv2.putText(canvas, "Fija la mirada y mantente quieto para estabilizar la muestra", (60, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2, cv2.LINE_AA)
 
         if len(self.calib_samples) >= required_samples:
             # Use median sample to reduce outliers
@@ -156,7 +191,9 @@ class EyeTrackerApp:
                 self.mapper.add_sample(med, tx, ty)
             self.calib_index += 1
             self.calib_samples = []
+            self.calib_gaze_history = []
             self.calib_point_started_at = time.perf_counter()
+            self.last_calibration_sample_at = 0.0
             if self.calib_index >= len(targets):
                 self._finish_calibration()
         return canvas
@@ -181,10 +218,18 @@ class EyeTrackerApp:
             self.filter.reset()
             self.controller.dwell.active = False
             if self.cfg.pause_on_face_lost and (now - self.last_face_seen_at) * 1000 > self.cfg.face_lost_pause_ms:
+                if not self.controller.paused:
+                    self.controller.set_paused(True)
+                    self.paused_by_face_loss = True
                 self.status = "Rostro no detectado - cursor en pausa"
             return None, 0.0
 
         self.last_face_seen_at = now
+        if self.paused_by_face_loss:
+            self.controller.set_paused(False)
+            self.paused_by_face_loss = False
+            self.filter.reset()
+            self.status = "Rostro recuperado - seguimiento activo"
         # Do not let a blink or a nearly closed eyelid pull the cursor.
         if feats.left_eye_open <= 0.08 or feats.right_eye_open <= 0.08:
             self.controller.dwell.active = False
@@ -269,9 +314,19 @@ class EyeTrackerApp:
             view = cv2.flip(view, 1)
         h, w = view.shape[:2]
         color = (0, 200, 0) if feats.face_detected else (0, 0, 255)
+        if self.eye_theia and self.eye_theia.last_face_box:
+            x1, y1, x2, y2 = self.eye_theia.last_face_box
+            sx, sy = w / max(frame.shape[1], 1), h / max(frame.shape[0], 1)
+            cv2.rectangle(view, (int(x1 * sx), int(y1 * sy)), (int(x2 * sx), int(y2 * sy)), (0, 220, 0), 2, cv2.LINE_AA)
         cv2.putText(view, f"Face: {'OK' if feats.face_detected else 'NO'}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
+        if self.eye_theia and not feats.face_detected:
+            hint = "ADD FRONT LIGHT" if self.eye_theia.last_brightness < 105 else "CENTER FACE / REDUCE GLASSES GLARE"
+            cv2.putText(view, hint, (20, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 180, 255), 2, cv2.LINE_AA)
+        elif self.eye_theia and self.eye_theia.last_detection_retry:
+            cv2.putText(view, self.eye_theia.last_detection_source.upper(), (20, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 220, 220), 2, cv2.LINE_AA)
         cv2.putText(view, f"Calibrado: {'SI' if self._gaze_ready() else 'NO'}", (20, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(view, f"Mouse: {'OFF' if self.controller.paused else 'ON'}", (20, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if not self.controller.paused else (0, 165, 255), 2, cv2.LINE_AA)
+        mouse_on = not self.controller.paused and self.cfg.move_cursor_enabled
+        cv2.putText(view, f"Mouse: {'ON' if mouse_on else 'OFF'}", (20, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if mouse_on else (0, 165, 255), 2, cv2.LINE_AA)
         if gaze:
             cv2.putText(view, f"Gaze: {gaze[0]},{gaze[1]} dwell {int(dwell*100)}%", (20, 125), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (220, 220, 220), 2, cv2.LINE_AA)
         ft = f"FINE gx={self.cfg.fine_gain_x:.2f} gy={self.cfg.fine_gain_y:.2f} ox={int(self.cfg.fine_offset_x)} oy={int(self.cfg.fine_offset_y)}"
@@ -288,6 +343,10 @@ class EyeTrackerApp:
         self.last_face_seen_at = time.perf_counter()
         cv2.namedWindow("EyeTrackerPro - Preview", cv2.WINDOW_NORMAL)
         cv2.resizeWindow("EyeTrackerPro - Preview", 960, 540)
+        cv2.moveWindow("EyeTrackerPro - Preview", 10, 10)
+        if self.overlay:
+            self.overlay.win_x = max(10, self.screen_w - self.overlay.width - 10)
+            self.overlay.win_y = max(10, self.screen_h - self.overlay.height - 10)
 
         try:
             while self.running:
@@ -352,6 +411,7 @@ class EyeTrackerApp:
                 elif key in (ord('c'), ord('C')):
                     self.start_calibration()
                 elif key in (ord('p'), ord('P')):
+                    self.paused_by_face_loss = False
                     self.controller.toggle_pause()
                     self.status = "Pausado" if self.controller.paused else "Mirada activa"
                 elif key in (ord('m'), ord('M')):

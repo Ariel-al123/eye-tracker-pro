@@ -4,15 +4,17 @@ This branch integrates the official EyeTheia iTracker model with the existing cu
 
 ## Setup
 
-Use Python 3.10 or 3.11, then install:
+Use Python 3.10 or 3.11. Do not install these pinned dependencies into Python 3.15: the pinned MediaPipe, OpenCV, and PyTorch versions do not provide a compatible set of wheels there. This repository already uses a Python 3.11 virtual environment at `.venv`.
 
 ```powershell
-pip install -r requirements-eyetheia.txt
+uv pip install --cache-dir .uv-cache --python .venv\Scripts\python.exe -r requirements-eyetheia.txt
 ```
 
-Run the app with `python main.py`. EyeTheia is selected by default in `config.json`. Set `gaze_engine` to `mediapipe` to switch back to the original landmark mapper.
+Run the app with `.venv\Scripts\python.exe main.py` or double-click `run.bat`. EyeTheia is selected by default in `config.json`. Set `gaze_engine` to `mediapipe` to switch back to the original landmark mapper.
 
-Press `C` and look at each of the nine targets. EyeTheia collects six valid camera frames per target and fine-tunes only the final regression layers so the pretrained visual feature extractors remain stable with a small personal calibration set. On CPU, this adaptation may take a little while; the cursor remains paused until it finishes.
+Press `C` and look at each of the nine targets. The tracker waits for a stable fixation and collects twelve valid frames per target. It fine-tunes only the final regression layers, then fits a small quadratic correction to the calibrated screen points. The cursor remains paused until both steps finish. If the face is not detected, the preview shows a framing or lighting hint; detection retries with local contrast enhancement and a second MediaPipe detector before giving up.
+
+For the most reliable tracking, place the webcam close to the top center of the display, keep both eyes visible, sit far enough back to show the full face, and add light in front of you. The camera preview shows the detected face box so you can adjust the position before calibrating.
 
 The pretrained MPIIFaceGaze checkpoint and image means are in `vendor/EyeTheia/src/`. No training dataset download is required.
 

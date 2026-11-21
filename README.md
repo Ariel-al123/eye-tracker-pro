@@ -44,18 +44,19 @@ eye-tracker-pro/
 - Python 3.10+ recomendado.
 - Webcam.
 
-Instalar dependencias:
+Instalar dependencias en el entorno del proyecto (Python 3.11 recomendado):
 
-```bash
-pip install -r requirements.txt
+```powershell
+uv venv --python 3.11 .venv
+uv pip install --cache-dir .uv-cache --python .venv\Scripts\python.exe -r requirements.txt
 ```
 
-En la rama `feature-eyetheia-gaze`, instala además las dependencias del motor profundo con `pip install -r requirements-eyetheia.txt`. Consulta [EYETHEIA.md](EYETHEIA.md) para configuración, calibración y licencia.
+En la rama `feature-eyetheia-gaze`, instala además las dependencias del motor profundo en ese mismo entorno con `uv pip install --cache-dir .uv-cache --python .venv\Scripts\python.exe -r requirements-eyetheia.txt`. No uses el `pip` global de Python 3.15 para estos pins. Consulta [EYETHEIA.md](EYETHEIA.md) para configuración, calibración y licencia.
 
 ## Ejecutar
 
 ```bash
-python main.py
+.venv\Scripts\python.exe main.py
 ```
 
 O en Windows: doble clic en `run.bat`.

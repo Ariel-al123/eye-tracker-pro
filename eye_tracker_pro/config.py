@@ -30,7 +30,7 @@ class AppConfig:
     # Calibration
     calibration_points: int = 9  # 5 or 9
     calibration_samples_per_point: int = 40
-    eyetheia_samples_per_target: int = 6
+    eyetheia_samples_per_target: int = 12
     calibration_sample_delay_ms: int = 40
     calibration_point_radius: int = 22
 
@@ -68,8 +68,8 @@ class AppConfig:
         ButtonConfig("btn_left", "Clic izq", "left_click", 20, 20),
         ButtonConfig("btn_right", "Clic der", "right_click", 180, 20),
         ButtonConfig("btn_double", "Doble", "double_click", 340, 20),
-        ButtonConfig("btn_up", "Scroll ↑", "scroll_up", 500, 20),
-        ButtonConfig("btn_down", "Scroll ↓", "scroll_down", 660, 20),
+        ButtonConfig("btn_up", "Subir", "scroll_up", 500, 20),
+        ButtonConfig("btn_down", "Bajar", "scroll_down", 660, 20),
         ButtonConfig("btn_pause", "Pausa", "pause", 820, 20),
         ButtonConfig("btn_cal", "Calibrar", "calibrate", 980, 20),
     ])

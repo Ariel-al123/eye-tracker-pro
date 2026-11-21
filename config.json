@@ -7,7 +7,7 @@
   "mirror_preview": true,
   "calibration_points": 9,
   "calibration_samples_per_point": 40,
-  "eyetheia_samples_per_target": 6,
+  "eyetheia_samples_per_target": 12,
   "calibration_sample_delay_ms": 40,
   "calibration_point_radius": 22,
   "filter_min_cutoff": 1.0,
@@ -63,7 +63,7 @@
     },
     {
       "id": "btn_up",
-      "label": "Scroll ↑",
+      "label": "Subir",
       "action": "scroll_up",
       "x": 500,
       "y": 20,
@@ -73,7 +73,7 @@
     },
     {
       "id": "btn_down",
-      "label": "Scroll ↓",
+      "label": "Bajar",
       "action": "scroll_down",
       "x": 660,
       "y": 20,
