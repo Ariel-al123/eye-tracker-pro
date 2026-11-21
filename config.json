@@ -1,0 +1,97 @@
+{
+  "camera_index": 0,
+  "camera_width": 1280,
+  "camera_height": 720,
+  "show_preview": true,
+  "mirror_preview": true,
+  "calibration_points": 9,
+  "calibration_samples_per_point": 25,
+  "calibration_sample_delay_ms": 40,
+  "calibration_point_radius": 22,
+  "filter_min_cutoff": 0.7,
+  "filter_beta": 0.005,
+  "filter_d_cutoff": 1.0,
+  "move_deadzone_px": 8,
+  "dwell_enabled": true,
+  "dwell_time_ms": 750,
+  "dwell_radius_px": 35,
+  "dwell_cooldown_ms": 700,
+  "pause_on_face_lost": true,
+  "face_lost_pause_ms": 700,
+  "move_cursor_enabled": true,
+  "overlay_enabled": true,
+  "overlay_alpha": 0.92,
+  "show_gaze_dot": true,
+  "buttons": [
+    {
+      "id": "btn_left",
+      "label": "Clic izq",
+      "action": "left_click",
+      "x": 20,
+      "y": 20,
+      "w": 140,
+      "h": 64,
+      "enabled": true
+    },
+    {
+      "id": "btn_right",
+      "label": "Clic der",
+      "action": "right_click",
+      "x": 180,
+      "y": 20,
+      "w": 140,
+      "h": 64,
+      "enabled": true
+    },
+    {
+      "id": "btn_double",
+      "label": "Doble",
+      "action": "double_click",
+      "x": 340,
+      "y": 20,
+      "w": 140,
+      "h": 64,
+      "enabled": true
+    },
+    {
+      "id": "btn_up",
+      "label": "Scroll ↑",
+      "action": "scroll_up",
+      "x": 500,
+      "y": 20,
+      "w": 140,
+      "h": 64,
+      "enabled": true
+    },
+    {
+      "id": "btn_down",
+      "label": "Scroll ↓",
+      "action": "scroll_down",
+      "x": 660,
+      "y": 20,
+      "w": 140,
+      "h": 64,
+      "enabled": true
+    },
+    {
+      "id": "btn_pause",
+      "label": "Pausa",
+      "action": "pause",
+      "x": 820,
+      "y": 20,
+      "w": 140,
+      "h": 64,
+      "enabled": true
+    },
+    {
+      "id": "btn_cal",
+      "label": "Calibrar",
+      "action": "calibrate",
+      "x": 980,
+      "y": 20,
+      "w": 140,
+      "h": 64,
+      "enabled": true
+    }
+  ]
+}
