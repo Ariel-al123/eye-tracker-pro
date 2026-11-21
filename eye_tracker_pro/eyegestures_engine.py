@@ -21,6 +21,7 @@ class EyeGesturesFrame:
     target: Optional[tuple[int, int]]
     acceptance_radius: int
     blink: bool
+    landmarks: Optional[list] = None
 
 
 class EyeGesturesEngine:
@@ -31,6 +32,7 @@ class EyeGesturesEngine:
         self._screen_height = screen_height
         self._calibration_path = calibration_path
         self._engine = self._new_tracker()
+        self._preview_landmarks = self._engine.finder._eye_tracker_preview_landmarks
         self.calibrating = False
         self.ready = False
         self.completed_points = 0
@@ -69,15 +71,21 @@ class EyeGesturesEngine:
         def find_face(frame_rgb):
             result = finder.mp_face_mesh.process(frame_rgb)
             if result.multi_face_landmarks:
+                landmark_cache[:] = result.multi_face_landmarks[0].landmark
                 return result
             if float(frame_rgb.mean()) < 5.0:
+                landmark_cache.clear()
                 return result
             ycrcb = cv2.cvtColor(frame_rgb, cv2.COLOR_RGB2YCrCb)
             ycrcb[:, :, 0] = clahe.apply(ycrcb[:, :, 0])
             enhanced_rgb = cv2.cvtColor(ycrcb, cv2.COLOR_YCrCb2RGB)
-            return finder.mp_face_mesh.process(enhanced_rgb)
+            result = finder.mp_face_mesh.process(enhanced_rgb)
+            landmark_cache[:] = result.multi_face_landmarks[0].landmark if result.multi_face_landmarks else []
+            return result
 
+        landmark_cache: list = []
         finder.find = find_face
+        finder._eye_tracker_preview_landmarks = landmark_cache
         tracker.finder = finder
         # 5 x 5 grid spans the entire screen. Values 0 and 1 intentionally
         # place the outer targets at the first/last pixel, including corners.
@@ -94,6 +102,7 @@ class EyeGesturesEngine:
         if old_mesh is not None:
             old_mesh.close()
         self._engine = self._new_tracker()
+        self._preview_landmarks = self._engine.finder._eye_tracker_preview_landmarks
         self.calibrating = True
         self.ready = False
         self.completed_points = 0
@@ -123,6 +132,7 @@ class EyeGesturesEngine:
         if mesh is not None:
             mesh.close()
         self._engine = self._new_tracker()
+        self._preview_landmarks = self._engine.finder._eye_tracker_preview_landmarks
         self.cancel_calibration()
         self._load_calibration()
         return self.ready
@@ -187,6 +197,7 @@ class EyeGesturesEngine:
             mesh.close()
 
     def detect(self, frame_bgr: np.ndarray) -> EyeGesturesFrame:
+        self._preview_landmarks.clear()
         if float(frame_bgr.mean()) < 2.0 and float(frame_bgr.std()) < 12.0:
             self.last_error = "la camara entrega una imagen negra"
             if self.last_error != self._reported_error:
@@ -234,7 +245,8 @@ class EyeGesturesEngine:
                 int(np.clip(target_raw[1], 0, self._screen_height - 1)),
             )
             radius = int(getattr(calibration_event, "acceptance_radius", 0))
-            self.last_frame = EyeGesturesFrame(face, point, target, radius, bool(event.blink))
+            landmarks = list(self._preview_landmarks) if face and self._preview_landmarks else None
+            self.last_frame = EyeGesturesFrame(face, point, target, radius, bool(event.blink), landmarks)
             self.last_error = None
             self._reported_error = None
         except Exception as exc:

@@ -31,6 +31,8 @@
   "overlay_enabled": true,
   "overlay_alpha": 0.92,
   "show_gaze_dot": true,
+  "auto_open_keyboard_on_text_focus": true,
+  "auto_keyboard_focus_delay_ms": 900,
   "overlay_mode": "navigation",
   "language": "es",
   "suggestion_history": {},

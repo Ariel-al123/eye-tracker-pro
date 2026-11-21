@@ -64,6 +64,8 @@ class AppConfig:
     overlay_enabled: bool = True
     overlay_alpha: float = 0.92
     show_gaze_dot: bool = True
+    auto_open_keyboard_on_text_focus: bool = True
+    auto_keyboard_focus_delay_ms: int = 900
     overlay_mode: str = "navigation"
     language: str = "en"
     suggestion_history: dict = field(default_factory=dict)

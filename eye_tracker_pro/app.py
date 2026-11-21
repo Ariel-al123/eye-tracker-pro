@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import sys
 import time
+from ctypes import wintypes
 from pathlib import Path
 from typing import Optional
 
@@ -32,6 +33,24 @@ CALIB_25 = [
     for y in (0.04, 0.27, 0.5, 0.73, 0.96)
     for x in (0.04, 0.27, 0.5, 0.73, 0.96)
 ]
+
+
+class _WinRect(ctypes.Structure):
+    _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG), ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+
+class _GuiThreadInfo(ctypes.Structure):
+    _fields_ = [
+        ("cb_size", wintypes.DWORD),
+        ("flags", wintypes.DWORD),
+        ("active", wintypes.HWND),
+        ("focus", wintypes.HWND),
+        ("capture", wintypes.HWND),
+        ("menu_owner", wintypes.HWND),
+        ("move_size", wintypes.HWND),
+        ("caret", wintypes.HWND),
+        ("caret_rect", _WinRect),
+    ]
 
 
 class EyeTrackerApp:
@@ -94,6 +113,15 @@ class EyeTrackerApp:
             self.status = "Calibración guardada cargada" if self.calibration_loaded else "Presiona C para calibrar"
         self._latched_control_id: Optional[str] = None
         self._global_keys_down: set[int] = set()
+        self._last_text_focus_poll = 0.0
+        self._text_focus_id: Optional[tuple[int, int, int]] = None
+        self._text_focus_since: Optional[float] = None
+        self._text_focus_missing_since: Optional[float] = None
+        self._auto_keyboard_handled_focus: Optional[tuple[int, int, int]] = None
+        self._wink_candidate_since: Optional[float] = None
+        self._wink_candidate_side: Optional[str] = None
+        self._wink_fired = False
+        self._last_wink_click_at = 0.0
         self.hotkeys = LowLevelHotkeyListener(
             fine_tune_active=lambda: self.fine_tune_mode,
             escape_allowed=lambda: self.calibrating or self.fine_tune_mode or self._is_eyetracker_foreground(),
@@ -220,6 +248,121 @@ class EyeTrackerApp:
             return "EyeTrackerPro" in title.value
         except Exception:
             return False
+
+    @staticmethod
+    def _get_focused_text_control() -> Optional[tuple[int, int, int]]:
+        """Use the foreground Windows caret as a no-dependency text-focus signal."""
+        if sys.platform != "win32":
+            return None
+        try:
+            user32 = ctypes.windll.user32
+            user32.GetGUIThreadInfo.argtypes = [wintypes.DWORD, ctypes.POINTER(_GuiThreadInfo)]
+            user32.GetGUIThreadInfo.restype = wintypes.BOOL
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+            user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+            foreground = user32.GetForegroundWindow()
+            if not foreground:
+                return None
+            thread_id = user32.GetWindowThreadProcessId(foreground, None)
+            info = _GuiThreadInfo()
+            info.cb_size = ctypes.sizeof(_GuiThreadInfo)
+            if not user32.GetGUIThreadInfo(thread_id, ctypes.byref(info)) or not info.caret:
+                return None
+            focus_hwnd = int(info.focus or info.caret)
+            caret_hwnd = int(info.caret)
+            # Quantize only the vertical caret location so separate browser fields
+            # can be distinguished without restarting the timer as text is typed.
+            caret_row = int(info.caret_rect.top) // 8
+            return focus_hwnd, caret_hwnd, caret_row
+        except Exception:
+            return None
+
+    def _check_auto_keyboard(self, now: float) -> None:
+        if (
+            not self.cfg.auto_open_keyboard_on_text_focus
+            or not self.overlay
+            or self.calibrating
+            or self.overlay.mode not in {"navigation", "keyboard"}
+            or sys.platform != "win32"
+            or now - self._last_text_focus_poll < 0.15
+        ):
+            return
+        self._last_text_focus_poll = now
+        focus_id = self._get_focused_text_control()
+        if focus_id is None:
+            self._text_focus_id = None
+            self._text_focus_since = None
+            if self._text_focus_missing_since is None:
+                self._text_focus_missing_since = now
+            elif now - self._text_focus_missing_since >= 0.7:
+                self._auto_keyboard_handled_focus = None
+            return
+
+        self._text_focus_missing_since = None
+        if focus_id != self._text_focus_id:
+            self._text_focus_id = focus_id
+            self._text_focus_since = now
+        if (
+            self._text_focus_since is not None
+            and focus_id != self._auto_keyboard_handled_focus
+            and now - self._text_focus_since >= max(0, self.cfg.auto_keyboard_focus_delay_ms) / 1000.0
+        ):
+            self._handle_action("mode:keyboard")
+            self._auto_keyboard_handled_focus = focus_id
+
+    @staticmethod
+    def _eye_openness_from_landmarks(landmarks: Optional[list], frame_shape: tuple[int, ...]) -> Optional[tuple[float, float]]:
+        """Compute the same vertical-to-horizontal eye ratios for EyeGestures frames."""
+        if not landmarks or len(landmarks) < 478:
+            return None
+        h, w = frame_shape[:2]
+
+        def point(index: int) -> tuple[float, float]:
+            landmark = landmarks[index]
+            return landmark.x * w, landmark.y * h
+
+        def ratio(top: int, bottom: int, outer: int, inner: int) -> float:
+            tx, ty = point(top)
+            bx, by = point(bottom)
+            ox, oy = point(outer)
+            ix, iy = point(inner)
+            width = ((ox - ix) ** 2 + (oy - iy) ** 2) ** 0.5
+            height = ((tx - bx) ** 2 + (ty - by) ** 2) ** 0.5
+            return height / width if width > 1e-6 else 0.0
+
+        return ratio(159, 145, 33, 133), ratio(386, 374, 362, 263)
+
+    def _check_wink(self, feats: GazeFeatures, now: float, eye_openness: Optional[tuple[float, float]] = None) -> None:
+        """Fire one right-click per deliberate one-eye closure."""
+        if (self.calibrating or self.controller.paused or not feats.face_detected or not self._gaze_ready()
+                or (self.overlay and self.overlay.mode in {"settings", "information"})):
+            self._wink_candidate_since = None
+            self._wink_candidate_side = None
+            return
+
+        left_open, right_open = eye_openness or (feats.left_eye_open, feats.right_eye_open)
+        closed_left = left_open <= 0.08 and right_open > 0.12
+        closed_right = right_open <= 0.08 and left_open > 0.12
+        side = "left" if closed_left else "right" if closed_right else None
+        if side is None:
+            if left_open > 0.12 and right_open > 0.12:
+                self._wink_fired = False
+            self._wink_candidate_since = None
+            self._wink_candidate_side = None
+            return
+
+        if side != self._wink_candidate_side:
+            self._wink_candidate_side = side
+            self._wink_candidate_since = now
+            return
+        if (self._wink_candidate_since is not None and not self._wink_fired
+                and (now - self._wink_candidate_since) >= 0.18
+                and (now - self._last_wink_click_at) >= 0.8):
+            result = self.controller.perform_action("right_click")
+            self._last_wink_click_at = now
+            self._wink_fired = True
+            self.status = "Guiño: clic derecho" if result == "right_click" else f"Guiño: {result}"
 
     def _sync_shortcut_states(self) -> None:
         if not self.overlay:
@@ -383,6 +526,8 @@ class EyeTrackerApp:
             mode = action.split(":", 1)[1]
             if self.overlay:
                 previous_mode = self.overlay.mode
+                if previous_mode == "keyboard" and mode != "keyboard":
+                    self._auto_keyboard_handled_focus = self._text_focus_id
                 self.overlay.mode = mode
                 self.cfg.overlay_mode = mode if mode in {"navigation", "game"} else self.cfg.overlay_mode
                 if mode in {"settings", "information"}:
@@ -694,6 +839,8 @@ class EyeTrackerApp:
         if self.cfg.mirror_preview:
             view = cv2.flip(view, 1)
         h, w = view.shape[:2]
+        if feats.face_detected and feats.landmarks:
+            self._draw_gaze_guides(view, feats.landmarks, gaze)
         color = (0, 200, 0) if feats.face_detected else (0, 0, 255)
         cv2.putText(view, f"Face: {'OK' if feats.face_detected else 'NO'}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
         cv2.putText(view, f"Calibrado: {'SI' if self._gaze_ready() else 'NO'}", (20, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
@@ -712,6 +859,56 @@ class EyeTrackerApp:
             cv2.putText(view, "A/D ox  W/S oy  J/L gx  I/K gy  R reset  F/ESC salir", (20, h - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(view, "C=calibrar  P=pausa  M=mouse  B=mouse debug  F=ajuste fino  ESC=salir", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2, cv2.LINE_AA)
         return view
+
+    def _draw_gaze_guides(self, view: np.ndarray, landmarks: list, gaze: Optional[tuple[int, int]]) -> None:
+        """Draw user-only landmarks and screen gaze direction on the camera preview."""
+        h, w = view.shape[:2]
+        points = []
+        for landmark in landmarks:
+            x = int(landmark.x * w)
+            if self.cfg.mirror_preview:
+                x = w - 1 - x
+            points.append((x, int(landmark.y * h)))
+        if not points:
+            return
+
+        # Sparse facial mesh dots make eye/head movement easier to read without
+        # obscuring the camera image. These are display-only; tracker inputs stay raw.
+        for index in range(0, len(points), 6):
+            cv2.circle(view, points[index], 1, (100, 220, 255), -1, cv2.LINE_AA)
+        eyes = (([474, 475, 476, 477], [33, 133], (0, 255, 255)),
+                ([469, 470, 471, 472], [362, 263], (255, 220, 0)))
+        for iris_indices, corners, color in eyes:
+            if max(*iris_indices, *corners) >= len(points):
+                continue
+            iris = [points[i] for i in iris_indices]
+            iris_center = tuple(int(sum(p[axis] for p in iris) / len(iris)) for axis in (0, 1))
+            eye_center = tuple((points[corners[0]][axis] + points[corners[1]][axis]) // 2 for axis in (0, 1))
+            # Short eye-direction vector gives a second, local guide alongside the screen map.
+            vector_end = (eye_center[0] + 3 * (iris_center[0] - eye_center[0]),
+                          eye_center[1] + 3 * (iris_center[1] - eye_center[1]))
+            cv2.arrowedLine(view, eye_center, vector_end, color, 2, cv2.LINE_AA, tipLength=0.3)
+            cv2.circle(view, iris_center, 5, color, 2, cv2.LINE_AA)
+            cv2.circle(view, iris_center, 2, (255, 255, 255), -1, cv2.LINE_AA)
+
+        # Small screen map translates the calibrated gaze point into a visible guide.
+        if gaze:
+            box_w, box_h, margin = min(180, w // 3), min(120, h // 3), 16
+            if box_w >= 70 and box_h >= 55:
+                x0, y0 = w - box_w - margin, margin
+                layer = view.copy()
+                cv2.rectangle(layer, (x0, y0), (x0 + box_w, y0 + box_h), (12, 12, 12), -1)
+                cv2.addWeighted(layer, 0.55, view, 0.45, 0, view)
+                cv2.rectangle(view, (x0, y0), (x0 + box_w, y0 + box_h), (230, 230, 230), 1)
+                for frac in (0.25, 0.5, 0.75):
+                    gx, gy = x0 + int(box_w * frac), y0 + int(box_h * frac)
+                    cv2.line(view, (gx, y0), (gx, y0 + box_h), (95, 95, 95), 1)
+                    cv2.line(view, (x0, gy), (x0 + box_w, gy), (95, 95, 95), 1)
+                sx = x0 + int(np.clip(gaze[0] / max(1, self.screen_w - 1), 0, 1) * box_w)
+                sy = y0 + int(np.clip(gaze[1] / max(1, self.screen_h - 1), 0, 1) * box_h)
+                cv2.circle(view, (sx, sy), 8, (0, 80, 255), -1, cv2.LINE_AA)
+                cv2.circle(view, (sx, sy), 11, (255, 255, 255), 1, cv2.LINE_AA)
+                cv2.putText(view, "SCREEN GAZE", (x0 + 5, y0 + 15), cv2.FONT_HERSHEY_SIMPLEX, 0.38, (255, 255, 255), 1, cv2.LINE_AA)
 
     def run(self) -> None:
         self._open_camera()
@@ -734,14 +931,17 @@ class EyeTrackerApp:
                     break
 
                 ts = int(time.perf_counter() * 1000)
+                wink_eye_openness = None
                 if self.eye_gestures:
                     gesture_frame = self.eye_gestures.detect(frame)
                     self.eye_gestures_point = gesture_frame.point
+                    wink_eye_openness = self._eye_openness_from_landmarks(gesture_frame.landmarks, frame.shape)
                     feats = GazeFeatures(
                         feature=np.zeros(11, dtype=np.float32),
                         face_detected=gesture_frame.face_detected,
                         left_eye_open=0.0 if gesture_frame.blink else 1.0,
                         right_eye_open=0.0 if gesture_frame.blink else 1.0,
+                        landmarks=gesture_frame.landmarks,
                     )
                     if self.calibrating:
                         if self.eye_gestures.completed_points >= self.eye_gestures.total_points:
@@ -773,7 +973,9 @@ class EyeTrackerApp:
 
                 gaze, dwell = (None, 0.0)
                 if not self.calibrating:
+                    self._check_wink(feats, time.perf_counter(), wink_eye_openness)
                     gaze, dwell = self._process_gaze(feats)
+                    self._check_auto_keyboard(time.perf_counter())
 
                 if self.overlay and not self.calibrating:
                     self._sync_shortcut_states()
