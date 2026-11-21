@@ -1,7 +1,5 @@
-from .GazeModel import GazeModel
-from .CalibrationDataset import CalibrationDataset
-from .GazeTracker import GazeTracker
-from .GazeDataLogger import GazeDataLogger
-from .Calibration import Calibration
+"""EyeTheia tracker modules.
 
-__all__ = ["GazeModel", "CalibrationDataset", "GazeTracker", "GazeDataLogger", "Calibration",]
+Keep package imports lazy: the cursor integration uses the model and dataset
+directly and does not need to import the demo runner or its UI dependencies.
+"""
