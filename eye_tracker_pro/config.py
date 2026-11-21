@@ -20,32 +20,40 @@ class ButtonConfig:
 
 @dataclass
 class AppConfig:
-    gaze_engine: str = "eyegestures"
+    gaze_engine: str = "eyegestures"  # eyegestures | mediapipe | eyetheia
     camera_index: int = 0
-    camera_width: int = 1280
-    camera_height: int = 720
+    camera_width: int = 640
+    camera_height: int = 480
     show_preview: bool = True
     mirror_preview: bool = True
 
     # Calibration
-    calibration_points: int = 9  # 5, 9, or 25
+    calibration_points: int = 25  # 5, 9, or a full-screen 5x5 grid
     calibration_samples_per_point: int = 40
+    eyetheia_samples_per_target: int = 12
     calibration_sample_delay_ms: int = 40
     calibration_stability_frames: int = 8
     calibration_stability_threshold: float = 0.045
     calibration_point_radius: int = 22
 
-    # Smoothing / filter
+    # Smoothing / cursor motion (the "dead zone" and speed cap live in the controller)
     filter_min_cutoff: float = 1.0
     filter_beta: float = 0.025
     filter_d_cutoff: float = 1.0
-    move_deadzone_px: int = 2
+    move_deadzone_px: int = 20
+    cursor_max_speed_px_s: int = 950
 
     # Dwell click
     dwell_enabled: bool = True
-    dwell_time_ms: int = 750
+    dwell_time_ms: int = 450
     dwell_radius_px: int = 35
     dwell_cooldown_ms: int = 700
+
+    # Edge scrolling (debug branch convenience)
+    edge_scroll_enabled: bool = False
+    edge_scroll_margin_px: int = 45
+    edge_scroll_interval_ms: int = 170
+    edge_scroll_amount: int = 2
 
     # Safety
     pause_on_face_lost: bool = True
@@ -60,7 +68,7 @@ class AppConfig:
     fine_step_px: int = 10
     fine_gain_step: float = 0.02
 
-    # UI
+    # UI / text entry (branch `fast`)
     overlay_enabled: bool = True
     overlay_alpha: float = 0.92
     show_gaze_dot: bool = True
@@ -87,8 +95,8 @@ class AppConfig:
         ButtonConfig("btn_left", "Clic izq", "left_click", 20, 20),
         ButtonConfig("btn_right", "Clic der", "right_click", 180, 20),
         ButtonConfig("btn_double", "Doble", "double_click", 340, 20),
-        ButtonConfig("btn_up", "Scroll ↑", "scroll_up", 500, 20),
-        ButtonConfig("btn_down", "Scroll ↓", "scroll_down", 660, 20),
+        ButtonConfig("btn_up", "Scroll arriba", "scroll_up", 500, 20),
+        ButtonConfig("btn_down", "Scroll abajo", "scroll_down", 660, 20),
         ButtonConfig("btn_pause", "Pausa", "pause", 820, 20),
         ButtonConfig("btn_cal", "Calibrar", "calibrate", 980, 20),
     ])

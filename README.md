@@ -1,27 +1,22 @@
-# Eye Tracker Pro
+# Eye Tracker Pro — versión definitiva (`fast`)
 
-Prototipo robusto de control por mirada para navegación básica de computadora, pensado para personas con movilidad limitada en manos/brazos. Usa webcam, MediaPipe Face Landmarker, calibración por puntos, suavizado One Euro Filter, dwell click y una capa de controles transparente.
+Sistema de control por mirada con webcam para navegar la computadora sin usar las manos. Esta rama conserva la **interfaz y el sistema de escritura** de `fast` (overlay Tk, teclado en pantalla, sugerencias, ajustes, información y modo juego) e integra el **mejor seguimiento y calibración** de `debug/screenpipe-eye-tracking` (EyeGestures de 25 puntos, zonas muertas/velocidad, marcador de mirada y motor EyeTheia opcional).
 
-> **Nota honesta**: esto no reemplaza un producto comercial pulido como Beam Eye Tracker. Es una base mucho más limpia y robusta que los prototipos anteriores, diseñada para iterar rápido.
+> **Nota honesta**: no reemplaza un producto comercial como Beam Eye Tracker. Es una base local, configurable y en desarrollo activo.
 
 ## Qué incluye
 
-- **Seguimiento de mirada con EyeGestures 3.2.4**, como en la configuración de tu amigo, con el mapper MediaPipe original disponible como fallback.
-- **Calibración de 5, 9 o 25 puntos** con muestreo temporizado, filtro de fijación estable y mediana para reducir errores.
-- La calibración válida se guarda en `calibration.json` y se reutiliza al iniciar. `calibration_points` en `config.json` acepta `5`, `9` o `25`.
-- **Mapeo mirada -> pantalla** por regresión polinomial regularizada (ridge).
-- **Suavizado** con One Euro Filter para menos jitter y mejor respuesta.
-- **Dwell click** configurable (tiempo y radio).
-- **Capa de controles transparente y siempre encima**. Los controles negros se muestran sobre el escritorio o juego sin taparlo por completo.
-- Diseños de navegación, menú, teclado, ajustes, información y modo juego activados por mirada.
-- Atajos organizados en páginas, con acciones de toque o alternancia, combinaciones editables y botones del ratón.
-- Teclas de control detectadas globalmente en Windows para que funcionen mientras una aplicación mantiene el foco.
-- Teclado en pantalla con sugerencias locales, teclas F1–F12 y compatibilidad con inglés, español, chino y francés en la interfaz.
-- Controles de cámara para juegos: mirar una esquina mueve el ratón relativo en esa dirección.
-- **Pausa de seguridad** cuando se pierde el rostro.
+- **EyeGestures 3.2.4** por defecto, con calibración de **25 puntos** guardada en `eye_gestures_calibration.json` y reutilizada al iniciar.
+- **Motor fallback `mediapipe`**: mapper propio con regresión ridge + One Euro Filter, calibración guardada en `calibration.json`.
+- **Motor opcional `eyetheia`**: modelo iTracker profundo con personalización por calibración (requiere dependencias y modelo extra; ver [EYETHEIA.md](EYETHEIA.md)).
+- **Zonas muertas y límite de velocidad** del cursor (`move_deadzone_px`, `cursor_max_speed_px_s`) para evitar saltos y temblores. `V` alterna modo precisión.
+- **Marcador de mirada** flotante y click-through (`show_gaze_dot`), con anillo de progreso de dwell.
+- **Dwell click** configurable y **pausa de seguridad** al perder el rostro.
+- **UI completa de `fast`**: navegación, menú, teclado, sugerencias locales, información, modo juego, páginas de atajos editables y hotkeys globales en Windows.
+- **Auto-scroll en bordes** (opcional, `G`) y acciones de navegador en el controlador.
 - **Procesamiento local**: no envía video ni datos a internet.
 
-EyeGestures se instala como dependencia ([`eyeGestures==3.2.4`](https://pypi.org/project/eyeGestures/3.2.4/)) y se distribuye bajo GPL-3.0; revisa esa licencia antes de redistribuir el programa.
+EyeGestures se distribuye bajo GPL-3.0; revisa esa licencia antes de redistribuir el programa.
 
 ## Estructura
 
@@ -29,31 +24,41 @@ EyeGestures se instala como dependencia ([`eyeGestures==3.2.4`](https://pypi.org
 eye-tracker-pro/
   main.py
   config.json
-  requirements.txt
-  run.bat
-  models/
-    face_landmarker.task
+  requirements.txt / requirements-eyegestures.txt / requirements-eyetheia.txt
+  run.bat / dependencias.bat
+  models/face_landmarker.task
   eye_tracker_pro/
-    app.py          # loop principal y calibración
-    camera.py       # (reservado/extendible)
-    config.py       # carga/guarda configuración
-    controller.py   # mouse, dwell, acciones
-    detector.py     # MediaPipe + features de mirada
-    filter.py       # One Euro Filter
-    mapper.py       # calibración y regresión a pantalla
-    overlay.py      # capa transparente con los controles por mirada
+    app.py               # loop principal, motores y calibración
+    config.py            # configuración (UI de fast + tracking de debug)
+    controller.py        # mouse, dwell, zonas muertas, acciones
+    detector.py          # MediaPipe Tasks FaceLandmarker
+    eyegestures_engine.py
+    eyetheia_engine.py   # opcional
+    cursor_overlay.py    # marcador de mirada
+    hotkeys.py           # hotkeys globales (fast)
+    suggestions.py       # sugerencias del teclado (fast)
+    mapper.py / filter.py / overlay.py
+  vendor/EyeTheia/       # modelo y fuentes del motor opcional
 ```
 
 ## Requisitos
 
-- Windows (probado como objetivo principal; usa `cv2.CAP_DSHOW`).
-- Python 3.10+ recomendado.
-- Webcam.
+- Windows (objetivo principal; usa `cv2.CAP_DSHOW`).
+- Python 3.10+ para la versión por defecto (3.11 recomendado si vas a usar EyeTheia).
+- Webcam y buena iluminación frontal.
 
-Instalar dependencias:
+Instalación rápida:
 
 ```bash
 pip install -r requirements.txt
+```
+
+O en Windows: doble clic en `run.bat` (usa `.venv` si existe y luego instala lo que falte).
+
+Para EyeTheia, además:
+
+```bash
+pip install -r requirements-eyetheia.txt
 ```
 
 ## Ejecutar
@@ -62,76 +67,54 @@ pip install -r requirements.txt
 python main.py
 ```
 
-O en Windows: doble clic en `run.bat`.
+Si no hay calibración guardada válida, el programa inicia la calibración automáticamente.
 
 ## Controles
 
 - `C`: iniciar/reiniciar calibración.
 - `P`: pausar/reanudar control.
 - `M`: activar/desactivar movimiento del cursor.
-- `B`: activar/desactivar clics del ratón en los controles (modo de depuración, desactivado por defecto; también se cambia desde Ajustes).
-- `F`: activar/desactivar modo de ajuste fino.
+- `B`: activar/desactivar clics del ratón en los controles (depuración).
+- `F`: activar/desactivar ajuste fino.
+- `V`: alternar modo precisión (zona muerta menor y velocidad reducida).
+- `G`: alternar auto-scroll en bordes.
 - `ESC`: cancelar calibración, salir del ajuste fino, o salir.
-- Capa de controles: mira un botón hasta completar el dwell para activar la acción. Para volver a activar el mismo botón, aparta la mirada y vuelve a mirarlo.
-- Triángulo superior izquierdo: abre/cierra el menú.
-- Teclado y accesos rápidos: están en la parte inferior; las flechas junto a los accesos cambian de página.
-- Ajustes: cambia las teclas, añade o quita teclas de combinaciones, elige toque o alternancia, cambia el idioma y añade páginas.
-- Ajustes e Información son pantallas modales: oscurecen el fondo y desactivan los controles de navegación hasta volver a Navegación. Cerrar el menú también cierra la pantalla modal.
-- Modo juego: mira las esquinas para mover la cámara. La opción del menú cambia a Navegación para volver.
-- Si no hay una calibración guardada válida, se inicia automáticamente al arrancar. Pulsa `C` para recalibrar cuando quieras.
-- EyeGestures guarda su calibración de 25 puntos en `eye_gestures_calibration.json`. Cambia `gaze_engine` a `mediapipe` en `config.json` para usar el mapper original.
+- Capa de controles: mira un botón hasta completar el dwell. El triángulo superior abre/cierra el menú.
+- Teclado y sugerencias: accesibles desde la capa; las flechas cambian de página de atajos.
+- Modo juego: mira las esquinas para mover la cámara; el menú permite volver a Navegación.
 
-### Modo ajuste fino (cuando `F` está activo)
+### Modo ajuste fino (`F` activo)
 
-- `A/D`: offset horizontal (`fine_offset_x`) -/+
-- `W/S`: offset vertical (`fine_offset_y`) -/+
-- `J/L`: ganancia horizontal (`fine_gain_x`) -/+
-- `I/K`: ganancia vertical (`fine_gain_y`) +/-
-- `R`: resetear ajuste fino a valores por defecto
-- `F` o `ESC`: salir del modo ajuste fino
+`A/D` offset X, `W/S` offset Y, `J/L` ganancia X, `I/K` ganancia Y, `R` reset, `F`/`ESC` salir.
 
-## Calibración (recomendado)
+## Calibración recomendada
 
-1. Siéntate a una distancia cómoda y estable (50–70 cm).
-2. Buena iluminación frontal, sin luz fuerte detrás.
-3. Presiona `C`.
-4. Mira cada punto rojo hasta completar la barra. Mantén la cabeza lo más estable posible.
-5. Si el cursor deriva, recalibra con `C`.
+1. Siéntate a 50–70 cm, con luz frontal y sin contraluz.
+2. Presiona `C` y mira cada punto rojo (25 por defecto) hasta completar el círculo/barra.
+3. Mantén la cabeza estable; espera el aviso entre puntos.
+4. Si el cursor deriva, repite `C`. La calibración válida se guarda y se reutiliza.
 
-## Configuración
+## Configuración (`config.json`)
 
-Edita `config.json`:
+- `gaze_engine`: `eyegestures` (por defecto), `mediapipe` o `eyetheia`.
+- `calibration_points`: `5`, `9` o `25`.
+- `move_deadzone_px` / `cursor_max_speed_px_s`: zona muerta y velocidad máxima.
+- `dwell_time_ms` / `dwell_radius_px`: tiempo y tolerancia del dwell.
+- `show_gaze_dot`: marcador flotante de mirada.
+- `overlay_mode`: `navigation` o `game` (se guarda automáticamente).
+- `keybind_pages`, `language`, `suggestion_history`: UI y escritura.
+- `edge_scroll_*`: auto-scroll opcional en bordes.
 
-- `calibration_points`: `5` o `9`.
-- `dwell_time_ms`: tiempo para activar dwell click.
-- `dwell_radius_px`: tolerancia de movimiento durante dwell.
-- `filter_min_cutoff`, `filter_beta`: suavizado (menos jitter = min_cutoff más bajo; más latencia).
-- `keybind_pages`: páginas de accesos directos, creadas y editadas desde Ajustes.
+## Limitaciones
 
-- `fine_gain_x`, `fine_gain_y`, `fine_offset_x`, `fine_offset_y`: ajuste fino manual.
-- `fine_step_px`, `fine_gain_step`: tamaño de paso del ajuste fino.
-
-## Limitaciones actuales
-
-- La precisión depende mucho de cámara, luz, distancia y estabilidad de cabeza.
-- El mapeo actual es 2D con compensación simple de cabeza; no es un modelo 3D completo como el de `MonitorTracking.py`.
-- Las sugerencias usan listas locales pequeñas y no predicen frases por contexto.
-- Algunos juegos en pantalla completa pueden bloquear entradas de teclado o ratón sintéticas según su modo de entrada y permisos.
-- PyAutoGUI controla el mouse del sistema; usa `P` para pausar en cualquier momento.
-
-## Próximos pasos recomendados
-
-- Teclado en pantalla accesible.
-- Perfiles por usuario (calibración guardada).
-- Corrección de deriva por recalibración rápida de 1 punto.
-- Modelo 3D/híbrido para mayor tolerancia a movimiento de cabeza.
-- Pruebas con usuarios reales y métricas de precisión (error en px, tiempo de selección).
-- Modo “zonas seguras” y confirmación para acciones críticas.
+- La precisión depende de cámara, luz, distancia y estabilidad de la cabeza.
+- El mapper `mediapipe` es 2D; EyeTheia es un modelo profundo opcional y más pesado.
+- Las sugerencias son locales y pequeñas, no predicen frases completas.
+- Algunos juegos a pantalla completa pueden bloquear entradas sintéticas.
 
 ## RISE / accesibilidad
 
-Este proyecto se puede enmarcar en RISE como:
-- **Inclusive**: acceso alternativo a la computadora sin manos.
-- **Empowering**: personalización de acciones y mayor agencia del usuario.
-- **Safe**: pausa ante pérdida de rostro, procesamiento local, acciones configurables.
-- **Responsible**: transparencia de límites, calibración explícita, sin captura/envío de datos sensibles por defecto.
+- **Inclusive**: acceso alternativo sin manos.
+- **Empowering**: acciones y atajos personalizables.
+- **Safe**: pausa al perder rostro, procesamiento local.
+- **Responsible**: límites explícitos y calibración transparente.

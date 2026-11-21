@@ -47,7 +47,7 @@ class LowLevelHotkeyListener:
     PM_NOREMOVE = 0
 
     MODIFIER_KEYS = {0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5}
-    APP_KEYS = {ord(char): ord(char.lower()) for char in "CPMBF"}
+    APP_KEYS = {ord(char): ord(char.lower()) for char in "CPMBFVG"}
     FINE_TUNE_KEYS = {ord(char): ord(char.lower()) for char in "ADWSJLIK R" if char != " "}
     APP_KEYS[0x1B] = 0x1B
 

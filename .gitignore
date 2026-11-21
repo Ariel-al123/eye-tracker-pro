@@ -1,2 +1,8 @@
 calibration.json
 eye_gestures_calibration.json
+__pycache__/
+*.py[cod]
+.venv/
+.uv-cache/
+.uv-python/
+.screenpipe-tools/

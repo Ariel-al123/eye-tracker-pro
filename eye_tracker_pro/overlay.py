@@ -57,6 +57,8 @@ class OverlayWindow:
         self.settings_selected: Optional[tuple[int, int]] = None
         self.locked_direction: Optional[str] = None
         self.last_direction: Optional[str] = None
+        self.precision_mode = False
+        self.edge_scroll_enabled = False
         self.controls: list[Control] = []
         self._created = False
         self._tk: Optional[tk.Tk] = None
@@ -118,6 +120,19 @@ class OverlayWindow:
 
         if self.mode == "navigation":
             self._add_shortcuts()
+            # Tracking helpers from the debug branch, always reachable by gaze.
+            self._control(
+                "precision_toggle",
+                f"PREC\n{'ON' if self.precision_mode else 'OFF'}",
+                "precision_toggle",
+                w - size - pad, menu_y, size, menu_size,
+            )
+            self._control(
+                "edge_scroll_toggle",
+                f"SCROLL\n{'ON' if self.edge_scroll_enabled else 'OFF'}",
+                "edge_scroll_toggle",
+                w - size * 2 - pad * 2, menu_y, size, menu_size,
+            )
             cy = h - pad * 2 - size
             keyboard_w = size * 2
             group_w = size * 2 + keyboard_w + pad * 2

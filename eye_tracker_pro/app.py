@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 import time
+from ctypes import wintypes
 from pathlib import Path
 from typing import Optional
 
@@ -12,9 +14,11 @@ import pyautogui
 
 from .config import AppConfig, load_config, save_config, shortcut_kind
 from .controller import CursorController
+from .cursor_overlay import CursorOverlay
 from .detector import FaceLandmarkerDetector, GazeFeatures
 from .filter import PointFilter
 from .eyegestures_engine import EyeGesturesEngine
+from .eyetheia_engine import EyeTheiaEngine
 from .hotkeys import LowLevelHotkeyListener
 from .mapper import GazeMapper
 from .overlay import OverlayWindow
@@ -40,14 +44,27 @@ class EyeTrackerApp:
         self.cfg: AppConfig = load_config(base_dir)
         self.suggestion_engine = SuggestionEngine(self.cfg.suggestion_history)
         self.screen_w, self.screen_h = pyautogui.size()
-        self.controller = CursorController(self.screen_w, self.screen_h, self.cfg.move_deadzone_px)
+        self.controller = CursorController(
+            self.screen_w,
+            self.screen_h,
+            self.cfg.move_deadzone_px,
+            self.cfg.cursor_max_speed_px_s,
+        )
+        self.controller.scroll_step = max(1, int(self.cfg.edge_scroll_amount) * 2)
         self.mapper = GazeMapper()
         self.calibration_path = base_dir / "calibration.json"
         self.eye_gestures: Optional[EyeGesturesEngine] = None
         self.eye_gestures_point: Optional[tuple[int, int]] = None
+        self.eye_theia: Optional[EyeTheiaEngine] = None
+        self.eye_observation = None
         self.engine_warning: Optional[str] = None
         requested_engine = str(self.cfg.gaze_engine).lower()
-        if requested_engine == "eyegestures":
+        if requested_engine == "eyetheia":
+            try:
+                self.eye_theia = EyeTheiaEngine(base_dir, self.screen_w, self.screen_h)
+            except Exception as exc:
+                self.engine_warning = f"EyeTheia unavailable; using MediaPipe mapper ({exc})"
+        elif requested_engine == "eyegestures":
             try:
                 self.eye_gestures = EyeGesturesEngine(
                     self.screen_w,
@@ -59,7 +76,11 @@ class EyeTrackerApp:
         elif requested_engine not in {"mediapipe", ""}:
             self.engine_warning = f"Unknown gaze engine '{requested_engine}'; using MediaPipe mapper"
         self.detector: Optional[FaceLandmarkerDetector] = None
-        if self.eye_gestures is None:
+        if self.eye_theia is not None:
+            self.active_gaze_engine = "eyetheia"
+            # EyeTheia is personalized per user, so a previous session is never reused.
+            self.calibration_loaded = False
+        elif self.eye_gestures is None:
             model_path = base_dir / "models" / "face_landmarker.task"
             self.detector = FaceLandmarkerDetector(model_path)
             self.active_gaze_engine = "mediapipe"
@@ -75,6 +96,10 @@ class EyeTrackerApp:
             self.overlay.language = self.cfg.language
             self.overlay.on_activate = self._activate_debug_control
             self.overlay.set_mouse_debug(self.cfg.debug_mouse_interaction)
+            self.overlay.precision_mode = self.controller.precision_mode
+            self.overlay.edge_scroll_enabled = self.cfg.edge_scroll_enabled
+        # Click-through dot from the debug branch; the Tk control layer never drew one.
+        self.cursor_overlay = CursorOverlay(self.screen_w, self.screen_h) if self.cfg.show_gaze_dot else None
 
         self.cap: Optional[cv2.VideoCapture] = None
         self.running = False
@@ -88,8 +113,13 @@ class EyeTrackerApp:
         self.last_face_seen_at = 0.0
         self.paused_by_face_loss = False
         self.fine_tune_mode = False
+        self.calibration_window_created = False
+        self._last_external_window: Optional[int] = None
+        self._last_edge_scroll_at = 0.0
         if self.engine_warning:
             self.status = self.engine_warning
+        elif self.eye_theia:
+            self.status = "Presiona C para personalizar EyeTheia"
         else:
             self.status = "Calibración guardada cargada" if self.calibration_loaded else "Presiona C para calibrar"
         self._latched_control_id: Optional[str] = None
@@ -151,6 +181,23 @@ class EyeTrackerApp:
         return [(int(round(x * (self.screen_w - 1))), int(round(y * (self.screen_h - 1)))) for x, y in pts]
 
     def start_calibration(self) -> None:
+        if self.eye_theia:
+            if self.eye_theia.training:
+                self.status = "Espera a que termine la personalización de EyeTheia."
+                return
+            self._calibration_targets()
+            self.eye_theia.begin_calibration()
+            self.calibrating = True
+            self.calib_index = 0
+            self.calib_samples = []
+            self.calib_feature_history = []
+            self.calib_point_started_at = time.perf_counter()
+            self.last_calibration_sample_at = 0.0
+            self.filter.reset()
+            self.status = "EyeTheia: mira el punto rojo"
+            self.controller.set_paused(True)
+            self._begin_calibration_display()
+            return
         if self.eye_gestures:
             self.eye_gestures.start_calibration()
             self.calibrating = True
@@ -250,6 +297,19 @@ class EyeTrackerApp:
             pass
 
     def _finish_calibration(self) -> None:
+        if self.eye_theia:
+            self.calibrating = False
+            self.calib_samples = []
+            self.calib_feature_history = []
+            self.filter.reset()
+            try:
+                self.eye_theia.train_async()
+                self.status = "Personalizando EyeTheia con tu calibración..."
+            except Exception as exc:
+                self.status = f"Falló la personalización: {exc}"
+                self.controller.set_paused(True)
+            self._end_calibration_display()
+            return
         if self.eye_gestures:
             saved = self.eye_gestures.finish_calibration()
             self.calibrating = False
@@ -346,7 +406,8 @@ class EyeTrackerApp:
             if stable and now - self.last_calibration_sample_at >= sample_interval:
                 self.calib_samples.append(feats.feature.copy())
                 self.last_calibration_sample_at = now
-            progress = len(self.calib_samples) / max(1, self.cfg.calibration_samples_per_point)
+            needed = self.cfg.eyetheia_samples_per_target if self.eye_theia else self.cfg.calibration_samples_per_point
+            progress = len(self.calib_samples) / max(1, needed)
             bar_w = 500
             cv2.rectangle(canvas, (60, 170), (60 + bar_w, 195), (80, 80, 80), -1)
             cv2.rectangle(canvas, (60, 170), (60 + int(bar_w * progress), 195), (0, 200, 0), -1)
@@ -360,10 +421,14 @@ class EyeTrackerApp:
         if feats.face_detected and eyes_open and not stable:
             cv2.putText(canvas, "Fija la mirada y mantén la cabeza estable", (60, 160), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 200, 255), 2, cv2.LINE_AA)
 
-        if len(self.calib_samples) >= self.cfg.calibration_samples_per_point:
-            # Use median sample to reduce outliers
-            med = np.median(np.stack(self.calib_samples, axis=0), axis=0)
-            self.mapper.add_sample(med, tx, ty)
+        needed = self.cfg.eyetheia_samples_per_target if self.eye_theia else self.cfg.calibration_samples_per_point
+        if len(self.calib_samples) >= needed:
+            if self.eye_theia:
+                self.eye_theia.add_calibration_sample(self.eye_observation, tx, ty)
+            else:
+                # Use median sample to reduce outliers
+                med = np.median(np.stack(self.calib_samples, axis=0), axis=0)
+                self.mapper.add_sample(med, tx, ty)
             self.calib_index += 1
             self.calib_samples = []
             self.calib_feature_history = []
@@ -568,6 +633,25 @@ class EyeTrackerApp:
             self.fine_tune_mode = not self.fine_tune_mode
             self.status = "Ajuste fino: ON" if self.fine_tune_mode else "Ajuste fino: OFF"
             return
+        if action == "precision_toggle":
+            self.controller.set_direct_mode(False)
+            self.controller.set_precision_mode(not self.controller.precision_mode)
+            if self.overlay:
+                self.overlay.precision_mode = self.controller.precision_mode
+            self.status = f"Precisión: {'ON' if self.controller.precision_mode else 'OFF'}"
+            return
+        if action == "edge_scroll_toggle":
+            self.cfg.edge_scroll_enabled = not self.cfg.edge_scroll_enabled
+            if self.overlay:
+                self.overlay.edge_scroll_enabled = self.cfg.edge_scroll_enabled
+            self.status = f"Auto-scroll: {'ON' if self.cfg.edge_scroll_enabled else 'OFF'}"
+            return
+        if action in {
+            "browser_back", "browser_forward", "browser_reload", "browser_address",
+            "browser_prev_tab", "browser_next_tab", "browser_zoom_in", "browser_zoom_out",
+            "browser_zoom_reset", "browser_undo", "scroll_up", "scroll_down",
+        }:
+            self._focus_browser_window()
         result = self.controller.perform_action(action)
         if action == "pause":
             self.status = "Pausado" if self.controller.paused else "Mirada activa"
@@ -578,6 +662,65 @@ class EyeTrackerApp:
         if not self.overlay:
             return
         self.overlay.suggestions = self.suggestion_engine.suggest(self.overlay.keyboard_text, self.cfg.language, limit=5)
+
+    @staticmethod
+    def _handle_value(handle: object) -> int:
+        return int(getattr(handle, "value", handle) or 0)
+
+    def _focus_browser_window(self) -> None:
+        """Send browser shortcuts to the last external window, not the overlay."""
+        if os.name != "nt" or not self._last_external_window:
+            return
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = wintypes.HWND(self._last_external_window)
+            user32.GetForegroundWindow.argtypes = []
+            user32.GetForegroundWindow.restype = wintypes.HWND
+            user32.IsWindow.argtypes = [wintypes.HWND]
+            user32.IsWindow.restype = wintypes.BOOL
+            if not user32.IsWindow(hwnd):
+                self._last_external_window = None
+                return
+            current = user32.GetForegroundWindow()
+            if self._handle_value(current) != self._handle_value(hwnd):
+                user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                user32.SetForegroundWindow(hwnd)
+                time.sleep(0.03)
+        except (AttributeError, OSError):
+            pass
+
+    def _update_edge_scroll(self, x: int, y: int) -> None:
+        if not self.cfg.edge_scroll_enabled or self.controller.paused:
+            return
+        if self.overlay and self.overlay.button_at(x, y):
+            return
+        now = time.monotonic()
+        if (now - self._last_edge_scroll_at) * 1000 < self.cfg.edge_scroll_interval_ms:
+            return
+        action = None
+        if y <= self.cfg.edge_scroll_margin_px:
+            action = "scroll_up"
+        elif y >= self.screen_h - 1 - self.cfg.edge_scroll_margin_px:
+            action = "scroll_down"
+        if action:
+            self._focus_browser_window()
+            amount = max(1, int(self.cfg.edge_scroll_amount))
+            self.controller.scroll_by(amount if action == "scroll_up" else -amount)
+            self._last_edge_scroll_at = now
+
+    def _finish_eye_theia_training_if_ready(self) -> None:
+        if not self.eye_theia or not self.eye_theia.training_done:
+            return
+        self.eye_theia.training_done = False
+        if self.eye_theia.training_error is not None:
+            self.eye_theia.ready = False
+            self.status = f"Falló EyeTheia: {self.eye_theia.training_error}"
+            self.controller.set_paused(True)
+            return
+        self.filter.reset()
+        self.eye_theia.ready = True
+        self.controller.set_paused(False)
+        self.status = "EyeTheia listo. Mirada activa."
 
     def _process_gaze(self, feats: GazeFeatures) -> tuple[Optional[tuple[int, int]], float]:
         now = time.perf_counter()
@@ -603,11 +746,15 @@ class EyeTrackerApp:
             self.controller.dwell.active = False
             self.controller.set_game_hold(set())
             return None, 0.0
-        pred = (
-            self.eye_gestures_point
-            if self.eye_gestures and self.eye_gestures.ready
-            else self.mapper.predict(feats.feature)
-        )
+        if self.eye_theia:
+            if self.eye_theia.training:
+                self.status = "Personalizando EyeTheia..."
+                return None, 0.0
+            pred = self.eye_theia.predict(self.eye_observation) if self.eye_observation else None
+        elif self.eye_gestures and self.eye_gestures.ready:
+            pred = self.eye_gestures_point
+        else:
+            pred = self.mapper.predict(feats.feature)
         if pred is None:
             self.status = "Sin calibración. Presiona C."
             return None, 0.0
@@ -630,13 +777,15 @@ class EyeTrackerApp:
         ix, iy = self.controller.clamp(fx, fy)
 
         game_mode = bool(self.overlay and self.overlay.mode == "game")
+        cursor_x, cursor_y = ix, iy
         if self.cfg.move_cursor_enabled and not self.controller.paused and not game_mode:
-            self.controller.move(ix, iy)
+            cursor_x, cursor_y = self.controller.move(ix, iy)
+            self._update_edge_scroll(cursor_x, cursor_y)
 
         dwell_progress = 0.0
         action_target = None
         if self.overlay:
-            btn = self.overlay.button_at(ix, iy)
+            btn = self.overlay.button_at(cursor_x, cursor_y)
             if btn is None or btn.id != self._latched_control_id:
                 self._latched_control_id = None
             if btn and btn.action.startswith("game_move:"):
@@ -651,14 +800,14 @@ class EyeTrackerApp:
                 self.controller.set_game_hold(set())
                 self.controller.dwell.active = False
                 if btn is not None and btn.id != self._latched_control_id:
-                    dwell_progress = self.controller.dwell_progress(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
-                    if self.controller.dwell_ready(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
+                    dwell_progress = self.controller.dwell_progress(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
+                    if self.controller.dwell_ready(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
                         action_target = btn.action
             else:
                 if btn is not None:
                     if btn.id != self._latched_control_id:
-                        dwell_progress = self.controller.dwell_progress(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
-                        if self.controller.dwell_ready(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
+                        dwell_progress = self.controller.dwell_progress(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
+                        if self.controller.dwell_ready(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
                             action_target = btn.action
                     else:
                         self.controller.dwell.active = False
@@ -666,15 +815,15 @@ class EyeTrackerApp:
                     # Ordinary dwell clicks remain available away from controls outside game mode.
                     modal_mode = self.overlay.mode in {"settings", "information"}
                     if not modal_mode and self.cfg.dwell_enabled and not self.controller.paused:
-                        dwell_progress = self.controller.dwell_progress(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
-                        if self.controller.dwell_ready(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
+                        dwell_progress = self.controller.dwell_progress(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
+                        if self.controller.dwell_ready(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
                             action_target = "left_click"
                     else:
                         self.controller.dwell.active = False
         else:
             if self.cfg.dwell_enabled and not self.controller.paused:
-                dwell_progress = self.controller.dwell_progress(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
-                if self.controller.dwell_ready(ix, iy, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
+                dwell_progress = self.controller.dwell_progress(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms)
+                if self.controller.dwell_ready(cursor_x, cursor_y, self.cfg.dwell_radius_px, self.cfg.dwell_time_ms, self.cfg.dwell_cooldown_ms):
                     action_target = "left_click"
 
         if action_target:
@@ -684,10 +833,14 @@ class EyeTrackerApp:
 
         if not self.controller.paused and self._gaze_ready():
             self.status = "Mirada activa"
-        return (ix, iy), dwell_progress
+        return (cursor_x, cursor_y), dwell_progress
 
     def _gaze_ready(self) -> bool:
-        return self.eye_gestures.ready if self.eye_gestures else self.mapper.calibrated
+        if self.eye_theia:
+            return self.eye_theia.ready
+        if self.eye_gestures:
+            return self.eye_gestures.ready
+        return self.mapper.calibrated
 
     def _draw_preview(self, frame: np.ndarray, feats: GazeFeatures, gaze: Optional[tuple[int, int]], dwell: float) -> np.ndarray:
         view = frame.copy()
@@ -695,11 +848,20 @@ class EyeTrackerApp:
             view = cv2.flip(view, 1)
         h, w = view.shape[:2]
         color = (0, 200, 0) if feats.face_detected else (0, 0, 255)
+        if self.eye_theia and self.eye_theia.last_face_box:
+            x1, y1, x2, y2 = self.eye_theia.last_face_box
+            sx, sy = w / max(frame.shape[1], 1), h / max(frame.shape[0], 1)
+            cv2.rectangle(view, (int(x1 * sx), int(y1 * sy)), (int(x2 * sx), int(y2 * sy)), (0, 220, 0), 2, cv2.LINE_AA)
         cv2.putText(view, f"Face: {'OK' if feats.face_detected else 'NO'}", (20, 35), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2, cv2.LINE_AA)
         cv2.putText(view, f"Calibrado: {'SI' if self._gaze_ready() else 'NO'}", (20, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
         cv2.putText(view, f"Engine: {self.active_gaze_engine}", (20, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (180, 220, 255), 2, cv2.LINE_AA)
         if self.engine_warning:
-            cv2.putText(view, "EyeGestures unavailable; using built-in tracker", (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 150, 255), 2, cv2.LINE_AA)
+            cv2.putText(view, "Engine unavailable; using built-in tracker", (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 150, 255), 2, cv2.LINE_AA)
+        elif self.eye_theia and not feats.face_detected:
+            hint = "ADD FRONT LIGHT" if self.eye_theia.last_brightness < 105 else "CENTER FACE / REDUCE GLARE"
+            cv2.putText(view, hint, (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 180, 255), 2, cv2.LINE_AA)
+        elif self.eye_theia and self.eye_theia.last_detection_retry:
+            cv2.putText(view, self.eye_theia.last_detection_source.upper(), (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 220), 2, cv2.LINE_AA)
         elif self.eye_gestures and self.eye_gestures.last_error:
             cv2.putText(view, "EyeGestures tracking error - see terminal", (20, 210), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 100, 255), 2, cv2.LINE_AA)
         cv2.putText(view, f"Mouse: {'OFF' if self.controller.paused else 'ON'}", (20, 95), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 255) if not self.controller.paused else (0, 165, 255), 2, cv2.LINE_AA)
@@ -710,7 +872,7 @@ class EyeTrackerApp:
         cv2.putText(view, ft, (20, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.65, ft_color, 2, cv2.LINE_AA)
         if self.fine_tune_mode:
             cv2.putText(view, "A/D ox  W/S oy  J/L gx  I/K gy  R reset  F/ESC salir", (20, h - 45), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(view, "C=calibrar  P=pausa  M=mouse  B=mouse debug  F=ajuste fino  ESC=salir", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 2, cv2.LINE_AA)
+        cv2.putText(view, "C=calibrar  P=pausa  M=mouse  V=precision  G=auto-scroll  F=ajuste  ESC=salir", (20, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 2, cv2.LINE_AA)
         return view
 
     def run(self) -> None:
@@ -734,7 +896,17 @@ class EyeTrackerApp:
                     break
 
                 ts = int(time.perf_counter() * 1000)
-                if self.eye_gestures:
+                if self.eye_theia:
+                    self.eye_observation = None if self.eye_theia.training else self.eye_theia.observe(frame)
+                    observation = self.eye_observation
+                    feats = GazeFeatures(
+                        feature=np.zeros(1, dtype=np.float32),
+                        face_detected=observation is not None,
+                        left_eye_open=observation.left_eye_open if observation else 0.0,
+                        right_eye_open=observation.right_eye_open if observation else 0.0,
+                    )
+                    self._finish_eye_theia_training_if_ready()
+                elif self.eye_gestures:
                     gesture_frame = self.eye_gestures.detect(frame)
                     self.eye_gestures_point = gesture_frame.point
                     feats = GazeFeatures(
@@ -781,7 +953,31 @@ class EyeTrackerApp:
                     self.overlay.paused = self.controller.paused
                     self.overlay.gaze = gaze if gaze else self.overlay.gaze
                     self.overlay.dwell_progress = dwell
+                    self.overlay.precision_mode = self.controller.precision_mode
+                    self.overlay.edge_scroll_enabled = self.cfg.edge_scroll_enabled
                     self.overlay.render()
+
+                if self.cursor_overlay:
+                    self.cursor_overlay.update(
+                        gaze,
+                        visible=bool(
+                            gaze
+                            and self.cfg.move_cursor_enabled
+                            and not self.controller.paused
+                            and not self.calibrating
+                        ),
+                        dwell_progress=dwell,
+                    )
+
+                # Remember the last non-tracker window so browser actions do not
+                # steal focus back to the transparent overlay.
+                if sys.platform == "win32" and not self.calibrating:
+                    try:
+                        foreground = ctypes.windll.user32.GetForegroundWindow()
+                        if foreground and not self._is_eyetracker_foreground():
+                            self._last_external_window = self._handle_value(foreground)
+                    except Exception:
+                        pass
 
                 preview = self._draw_preview(frame, feats, gaze, dwell)
                 cv2.imshow("EyeTrackerPro - Preview", preview)
@@ -797,6 +993,10 @@ class EyeTrackerApp:
                         if self.eye_gestures:
                             self.eye_gestures.cancel_calibration()
                             self.calibration_loaded = self.eye_gestures.restore_saved_calibration()
+                        elif self.eye_theia:
+                            self.eye_theia.ready = False
+                            self.eye_observation = None
+                            self.calibration_loaded = False
                         else:
                             self.calibration_loaded = self.mapper.load(self.calibration_path, self.screen_w, self.screen_h)
                         if self.calibration_loaded:
@@ -821,6 +1021,10 @@ class EyeTrackerApp:
                     self.status = f"Movimiento cursor: {'ON' if self.cfg.move_cursor_enabled else 'OFF'}"
                 elif key in (ord('b'), ord('B')):
                     self._toggle_mouse_debug()
+                elif key in (ord('v'), ord('V')):
+                    self._handle_action("precision_toggle")
+                elif key in (ord('g'), ord('G')):
+                    self._handle_action("edge_scroll_toggle")
                 elif key in (ord('f'), ord('F')):
                     self.fine_tune_mode = not self.fine_tune_mode
                     self.status = "Ajuste fino: ON (WASD offset, IJKL gain, R reset)" if self.fine_tune_mode else "Ajuste fino: OFF"
@@ -869,6 +1073,11 @@ class EyeTrackerApp:
                 self.detector.close()
         except Exception:
             pass
+        if self.eye_theia:
+            try:
+                self.eye_theia.close()
+            except Exception:
+                pass
         if self.eye_gestures:
             try:
                 self.eye_gestures.close()
@@ -876,5 +1085,10 @@ class EyeTrackerApp:
                 pass
         if self.overlay:
             self.overlay.destroy()
+        if self.cursor_overlay:
+            try:
+                self.cursor_overlay.destroy()
+            except Exception:
+                pass
         cv2.destroyAllWindows()
         save_config(self.base_dir, self.cfg)

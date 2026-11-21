@@ -21,21 +21,47 @@ class DwellState:
 
 
 class CursorController:
-    def __init__(self, screen_w: int, screen_h: int, move_deadzone_px: int = 8):
+    def __init__(
+        self,
+        screen_w: int,
+        screen_h: int,
+        move_deadzone_px: int = 8,
+        max_speed_px_s: int = 950,
+    ):
         self.screen_w = screen_w
         self.screen_h = screen_h
         self.paused = False
         self.dragging = False
         self.dwell = DwellState()
         self.last_move_at = 0.0
-        self.move_deadzone_px = max(0, int(move_deadzone_px))
+        self.base_deadzone_px = max(0, int(move_deadzone_px))
+        self.base_max_speed_px_s = max(1, int(max_speed_px_s))
+        self.move_deadzone_px = self.base_deadzone_px
+        self.max_speed_px_s = self.base_max_speed_px_s
+        self.precision_mode = False
+        self.direct_mode = False
+        self.scroll_step = 4
         self._last_sent: tuple[int, int] | None = None
         self.held_keys: set[str] = set()
         self.held_shortcuts: set[frozenset[str]] = set()
         self.held_mouse_buttons: set[str] = set()
         self.game_held_keys: set[str] = set()
 
+    def set_direct_mode(self, enabled: bool) -> None:
+        self.direct_mode = bool(enabled)
+
+    def set_precision_mode(self, enabled: bool) -> None:
+        self.precision_mode = bool(enabled)
+        if self.precision_mode:
+            self.move_deadzone_px = max(3, self.base_deadzone_px // 2)
+            self.max_speed_px_s = max(350, int(self.base_max_speed_px_s * 0.5))
+        else:
+            self.move_deadzone_px = self.base_deadzone_px
+            self.max_speed_px_s = self.base_max_speed_px_s
+
     def set_paused(self, paused: bool) -> None:
+        if self.paused != paused:
+            self.last_move_at = time.perf_counter()
         self.paused = paused
         if paused:
             self.release_all()
@@ -206,14 +232,29 @@ class CursorController:
     def move(self, x: float, y: float) -> tuple[int, int]:
         xi, yi = self.clamp(x, y)
         if not self.paused:
-            if self._last_sent is not None:
+            now = time.perf_counter()
+            if self._last_sent is None:
+                position = pyautogui.position()
+                self._last_sent = self.clamp(position.x, position.y)
+                self.last_move_at = now
+
+            if self._last_sent is not None and not self.direct_mode:
                 dx = xi - self._last_sent[0]
                 dy = yi - self._last_sent[1]
                 if (dx * dx + dy * dy) < (self.move_deadzone_px * self.move_deadzone_px):
                     return self._last_sent
+
+                distance = (dx * dx + dy * dy) ** 0.5
+                elapsed = max(0.001, min(0.05, now - self.last_move_at))
+                max_step = self.max_speed_px_s * elapsed
+                if distance > max_step:
+                    scale = max_step / distance
+                    xi = int(round(self._last_sent[0] + dx * scale))
+                    yi = int(round(self._last_sent[1] + dy * scale))
+
             pyautogui.moveTo(xi, yi)
             self._last_sent = (xi, yi)
-            self.last_move_at = time.perf_counter()
+            self.last_move_at = now
         return xi, yi
 
     def perform_action(self, action: str) -> str:
@@ -230,9 +271,31 @@ class CursorController:
             elif action == "double_click":
                 pyautogui.doubleClick()
             elif action == "scroll_up":
-                pyautogui.scroll(250)
+                self.scroll_by(self.scroll_step)
             elif action == "scroll_down":
-                pyautogui.scroll(-250)
+                self.scroll_by(-self.scroll_step)
+            elif action == "browser_back":
+                pyautogui.hotkey("alt", "left")
+            elif action == "browser_forward":
+                pyautogui.hotkey("alt", "right")
+            elif action == "browser_reload":
+                pyautogui.hotkey("ctrl", "r")
+            elif action == "browser_address":
+                pyautogui.hotkey("ctrl", "l")
+            elif action == "browser_prev_tab":
+                pyautogui.hotkey("ctrl", "shift", "tab")
+            elif action == "browser_next_tab":
+                pyautogui.hotkey("ctrl", "tab")
+            elif action == "browser_zoom_in":
+                pyautogui.hotkey("ctrl", "=")
+            elif action == "browser_zoom_out":
+                pyautogui.hotkey("ctrl", "-")
+            elif action == "browser_zoom_reset":
+                pyautogui.hotkey("ctrl", "0")
+            elif action == "browser_undo":
+                pyautogui.hotkey("ctrl", "z")
+            elif action == "cancel_dwell":
+                self.dwell.active = False
             elif action == "drag_toggle":
                 if self.dragging:
                     pyautogui.mouseUp()
@@ -249,6 +312,10 @@ class CursorController:
         except Exception as e:
             return f"error:{e}"
         return action
+
+    @staticmethod
+    def scroll_by(amount: int) -> None:
+        pyautogui.scroll(int(amount))
 
     def dwell_progress(self, x: float, y: float, radius_px: int, dwell_ms: int, cooldown_ms: int) -> float:
         """Returns 0..1 progress; resets when cursor leaves radius or during cooldown."""
